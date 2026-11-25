@@ -238,9 +238,10 @@ export const sendMessageToAI = async (
       if (sessionSnap.exists()) {
         sessionData = sessionSnap.data() as Session;
       }
-    } catch {
-      // Continue safely if session read is unavailable
+    } catch (err) {
+      throw new Error('Could not verify conversation state');
     }
+    if (!sessionData) throw new Error('Conversation not found');
 
     // Explicit Human Takeover / Completed Gate: never call AI while staff controls the chat
     if (sessionData?.status === 'staff_controlled' || sessionData?.status === 'completed') {
@@ -269,7 +270,7 @@ export const sendMessageToAI = async (
 
     const history = historyDocs as Message[];
     const lastMessage = history[history.length - 1];
-    if (!lastMessage || lastMessage.sender !== 'guest') return;
+    if (!lastMessage || lastMessage.sender !== 'guest' || (latestGuestMessageId && lastMessage.id !== latestGuestMessageId)) return;
     lastGuestText = lastMessage.text;
     const targetGuestMsgId = latestGuestMessageId || lastMessage.id;
 
@@ -482,8 +483,9 @@ export const sendMessageToAI = async (
       if (latestStatus === 'staff_controlled' || latestStatus === 'completed') {
         return;
       }
-    } catch {
-      // Proceed safely if transient read fails
+    } catch (err) {
+      console.error('Could not verify session before AI response:', err);
+      throw new Error('Could not verify conversation state');
     }
 
     // 8. Persist AI Response AFTER requests succeed/fail cleanly
@@ -532,6 +534,10 @@ export const sendMessageToAI = async (
     });
   } catch (error) {
     console.error('Ren AI Error:', error);
+    // Do not post an outage message into a staff-controlled or closed chat.
+    const latestSession = await getDoc(doc(db, sessionPath));
+    if (!latestSession.exists() || ['staff_controlled', 'completed'].includes(latestSession.data().status)) return;
+    sessionData = latestSession.data() as Session;
 
     // Deterministic AI-outage fallback: never drop emergencies or silence guest messages
     const safetySignal = detectDeterministicSafetySignal(lastGuestText);
@@ -592,9 +598,7 @@ export const sendMessageToAI = async (
       rawErr.includes('Authentication') ||
       rawErr.includes('authentication token');
 
-    const fallbackMsg = isActionableConfigErr
-      ? rawErr
-      : rawErr.includes('Rate limit')
+    const fallbackMsg = !isActionableConfigErr && rawErr.includes('Rate limit')
         ? 'Ren AI is momentarily busy, but your message was saved for our hotel team. Please try again in a moment, or use Quick Request above or tap Speak with Staff.'
         : 'Ren AI is temporarily unavailable, but your message was saved for our hotel team. You can use Quick Request above or tap Speak with Staff for immediate help.';
 
