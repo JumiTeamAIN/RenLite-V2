@@ -1,0 +1,409 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedAdminEmail() {
+      return isSignedIn() &&
+        request.auth.token.email == 'jumi@teamain.org' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerifiedAdminEmail() ||
+        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isHotelOwner(hotelId) {
+      return isSignedIn() && request.auth.uid == hotelId;
+    }
+
+    function isValidSlas(slas) {
+      return slas is map &&
+        slas.keys().hasAll(['housekeeping', 'maintenance', 'front_desk']) &&
+        slas.keys().hasOnly(['housekeeping', 'maintenance', 'front_desk']) &&
+        slas.housekeeping is int && slas.housekeeping >= 0 && slas.housekeeping <= 1440 &&
+        slas.maintenance is int && slas.maintenance >= 0 && slas.maintenance <= 1440 &&
+        slas.front_desk is int && slas.front_desk >= 0 && slas.front_desk <= 1440;
+    }
+
+    function isValidHotel(data, hotelId) {
+      return data.keys().hasAll(['name', 'persona', 'faqs', 'slas']) &&
+        data.keys().hasOnly(['id', 'name', 'persona', 'faqs', 'slas', 'locations', 'emergencyPhone']) &&
+        (!('id' in data) || (isValidId(data.id) && data.id == hotelId)) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 200 &&
+        data.persona is string && data.persona.size() <= 4000 &&
+        data.faqs is list && data.faqs.size() <= 100 &&
+        (data.faqs.size() == 0 || data.faqs[0] is map) &&
+        (!('locations' in data) || (data.locations is list && data.locations.size() <= 500 && (data.locations.size() == 0 || data.locations[0] is map))) &&
+        (!('emergencyPhone' in data) || (data.emergencyPhone is string && data.emergencyPhone.size() <= 50)) &&
+        isValidSlas(data.slas);
+    }
+
+    function isValidSession(data) {
+      return data.keys().hasAll(['guestUid', 'lastUpdatedAt', 'previewText', 'isUnread', 'status']) &&
+        data.keys().hasOnly([
+          'guestUid',
+          'roomNumber',
+          'locationId',
+          'locationLabel',
+          'locationType',
+          'lastUpdatedAt',
+          'previewText',
+          'previewStaffText',
+          'isUnread',
+          'status',
+          'guestLanguage',
+          'assignedStaffUid',
+          'assignedStaffEmail',
+          'escalationReason',
+          'escalationSeverity'
+        ]) &&
+        isValidId(data.guestUid) &&
+        data.lastUpdatedAt is timestamp &&
+        data.previewText is string && data.previewText.size() <= 5000 &&
+        (!('previewStaffText' in data) || (data.previewStaffText is string && data.previewStaffText.size() <= 5000)) &&
+        data.isUnread is bool &&
+        data.status in ['active', 'awaiting_human', 'staff_controlled', 'escalated', 'completed'] &&
+        (!('roomNumber' in data) || (data.roomNumber is string && data.roomNumber.size() <= 50)) &&
+        (!('locationId' in data) || (data.locationId is string && data.locationId.size() <= 128)) &&
+        (!('locationLabel' in data) || (data.locationLabel is string && data.locationLabel.size() <= 100)) &&
+        (!('locationType' in data) || (data.locationType is string && data.locationType.size() <= 50)) &&
+        (!('guestLanguage' in data) || (data.guestLanguage is string && data.guestLanguage.size() <= 20)) &&
+        (!('assignedStaffUid' in data) || (data.assignedStaffUid is string && data.assignedStaffUid.size() <= 128)) &&
+        (!('assignedStaffEmail' in data) || (data.assignedStaffEmail is string && data.assignedStaffEmail.size() <= 200)) &&
+        (!('escalationReason' in data) || (data.escalationReason is string && data.escalationReason.size() <= 500)) &&
+        (!('escalationSeverity' in data) || data.escalationSeverity in ['high', 'critical']);
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['sender', 'text', 'timestamp']) &&
+        data.keys().hasOnly([
+          'sender',
+          'text',
+          'staffText',
+          'guestText',
+          'originalLanguage',
+          'translatedToLanguage',
+          'timestamp',
+          'guestUid',
+          'staffUid'
+        ]) &&
+        data.sender in ['guest', 'ai', 'staff', 'system'] &&
+        data.text is string && data.text.size() >= 1 && data.text.size() <= 5000 &&
+        (!('staffText' in data) || (data.staffText is string && data.staffText.size() <= 5000)) &&
+        (!('guestText' in data) || (data.guestText is string && data.guestText.size() <= 5000)) &&
+        (!('originalLanguage' in data) || (data.originalLanguage is string && data.originalLanguage.size() <= 20)) &&
+        (!('translatedToLanguage' in data) || (data.translatedToLanguage is string && data.translatedToLanguage.size() <= 20)) &&
+        data.timestamp is timestamp &&
+        (!('guestUid' in data) || isValidId(data.guestUid)) &&
+        (!('staffUid' in data) || isValidId(data.staffUid));
+    }
+
+    function isValidRequest(data) {
+      return data.keys().hasAll(['sessionId', 'item', 'category', 'roomNumber', 'status', 'createdAt', 'lastUpdated']) &&
+        data.keys().hasOnly([
+          'referenceCode',
+          'sessionId',
+          'item',
+          'quantity',
+          'category',
+          'department',
+          'roomNumber',
+          'status',
+          'createdAt',
+          'lastUpdated',
+          'acknowledgedAt',
+          'completedAt',
+          'description',
+          'originalMessage',
+          'priority',
+          'source',
+          'guestUid'
+        ]) &&
+        isValidId(data.sessionId) &&
+        (!('referenceCode' in data) || (data.referenceCode is string && data.referenceCode.size() >= 1 && data.referenceCode.size() <= 30)) &&
+        data.item is string && data.item.size() >= 1 && data.item.size() <= 200 &&
+        (!('quantity' in data) || (data.quantity is int && data.quantity >= 1 && data.quantity <= 50)) &&
+        data.category is string && data.category.size() >= 1 && data.category.size() <= 100 &&
+        (!('department' in data) || (data.department is string && data.department.size() >= 1 && data.department.size() <= 100)) &&
+        data.roomNumber is string && data.roomNumber.size() <= 50 &&
+        data.status in ['pending', 'acknowledged', 'in_progress', 'completed', 'escalated', 'reopened', 'cancelled'] &&
+        data.createdAt is timestamp &&
+        data.lastUpdated is timestamp &&
+        (!('acknowledgedAt' in data) || data.acknowledgedAt is timestamp) &&
+        (!('completedAt' in data) || data.completedAt is timestamp) &&
+        (!('description' in data) || (data.description is string && data.description.size() <= 1000)) &&
+        (!('originalMessage' in data) || (data.originalMessage is string && data.originalMessage.size() <= 1000)) &&
+        (!('priority' in data) || data.priority in ['normal', 'high', 'urgent']) &&
+        (!('source' in data) || data.source in ['ai', 'structured', 'staff']) &&
+        (!('guestUid' in data) || isValidId(data.guestUid));
+    }
+
+    match /hotels/{hotelId} {
+      allow get: if isSignedIn() && isValidId(hotelId);
+      allow list: if false;
+      allow create: if isSignedIn() &&
+        isValidId(hotelId) &&
+        isValidHotel(incoming(), hotelId) &&
+        (isHotelOwner(hotelId) || isAdmin());
+      allow update: if isSignedIn() &&
+        isValidId(hotelId) &&
+        isValidHotel(incoming(), hotelId) &&
+        (isHotelOwner(hotelId) || isAdmin()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['name', 'persona', 'faqs', 'slas', 'locations', 'emergencyPhone']) &&
+        (!('id' in existing()) || incoming().id == existing().id);
+      allow delete: if false;
+
+      match /sessions/{sessionId} {
+        allow get: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(sessionId) &&
+          (existing().guestUid == request.auth.uid || isHotelOwner(hotelId) || isAdmin());
+        allow list: if isSignedIn() &&
+          (existing().guestUid == request.auth.uid || hotelId == request.auth.uid || isVerifiedAdminEmail());
+        allow create: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(sessionId) &&
+          isValidSession(incoming()) &&
+          incoming().guestUid == request.auth.uid &&
+          incoming().status == 'active' &&
+          incoming().lastUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/hotels/$(hotelId));
+        allow update: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(sessionId) &&
+          isValidSession(incoming()) &&
+          incoming().guestUid == existing().guestUid &&
+          incoming().lastUpdatedAt == request.time &&
+          (
+            (
+              existing().guestUid == request.auth.uid &&
+              (
+                (
+                  existing().status != 'completed' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'lastUpdatedAt',
+                    'previewText',
+                    'previewStaffText',
+                    'isUnread',
+                    'roomNumber',
+                    'locationId',
+                    'locationLabel',
+                    'locationType',
+                    'guestLanguage'
+                  ])
+                ) ||
+                (
+                  existing().status != 'completed' &&
+                  existing().status != 'staff_controlled' &&
+                  incoming().status in ['awaiting_human', 'escalated'] &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'lastUpdatedAt',
+                    'previewText',
+                    'previewStaffText',
+                    'isUnread',
+                    'roomNumber',
+                    'locationId',
+                    'locationLabel',
+                    'locationType',
+                    'guestLanguage',
+                    'status',
+                    'escalationReason',
+                    'escalationSeverity'
+                  ])
+                ) ||
+                (
+                  existing().status == 'completed' &&
+                  incoming().status == 'active' &&
+                  incoming().diff(existing()).affectedKeys().hasOnly([
+                    'lastUpdatedAt',
+                    'previewText',
+                    'previewStaffText',
+                    'isUnread',
+                    'status',
+                    'roomNumber',
+                    'locationId',
+                    'locationLabel',
+                    'locationType',
+                    'guestLanguage'
+                  ])
+                )
+              )
+            ) ||
+            (
+              (isHotelOwner(hotelId) || isAdmin()) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'lastUpdatedAt',
+                'previewText',
+                'previewStaffText',
+                'isUnread',
+                'status',
+                'roomNumber',
+                'locationId',
+                'locationLabel',
+                'locationType',
+                'guestLanguage',
+                'assignedStaffUid',
+                'assignedStaffEmail',
+                'escalationReason',
+                'escalationSeverity'
+              ])
+            )
+          );
+        allow delete: if false;
+
+        match /messages/{messageId} {
+          allow get: if isSignedIn() &&
+            isValidId(hotelId) &&
+            isValidId(sessionId) &&
+            isValidId(messageId) &&
+            (
+              isHotelOwner(hotelId) ||
+              isAdmin() ||
+              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+            );
+          allow list: if isSignedIn() &&
+            (
+              hotelId == request.auth.uid ||
+              isVerifiedAdminEmail() ||
+              existing().guestUid == request.auth.uid
+            );
+          allow create: if isSignedIn() &&
+            isValidId(hotelId) &&
+            isValidId(sessionId) &&
+            isValidId(messageId) &&
+            isValidMessage(incoming()) &&
+            incoming().timestamp == request.time &&
+            exists(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)) &&
+            (
+              (
+                incoming().sender in ['guest', 'ai', 'system'] &&
+                'guestUid' in incoming() &&
+                incoming().guestUid == request.auth.uid &&
+                get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+              ) ||
+              (
+                incoming().sender in ['staff', 'system'] &&
+                (isHotelOwner(hotelId) || isAdmin()) &&
+                (
+                  !('guestUid' in incoming()) ||
+                  incoming().guestUid == get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid
+                ) &&
+                (!('staffUid' in incoming()) || incoming().staffUid == request.auth.uid)
+              )
+            );
+          allow update: if isSignedIn() &&
+            isValidId(hotelId) &&
+            isValidId(sessionId) &&
+            isValidId(messageId) &&
+            isValidMessage(incoming()) &&
+            !('staffText' in existing()) &&
+            incoming().sender == existing().sender &&
+            incoming().text == existing().text &&
+            incoming().timestamp == existing().timestamp &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'staffText',
+              'originalLanguage',
+              'translatedToLanguage'
+            ]) &&
+            (
+              isHotelOwner(hotelId) ||
+              isAdmin() ||
+              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+            );
+          allow delete: if false;
+        }
+      }
+
+      match /requests/{requestId} {
+        allow get: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(requestId) &&
+          (isHotelOwner(hotelId) || isAdmin() || existing().guestUid == request.auth.uid);
+        allow list: if isSignedIn() &&
+          (hotelId == request.auth.uid || isVerifiedAdminEmail() || existing().guestUid == request.auth.uid);
+        allow create: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(requestId) &&
+          isValidRequest(incoming()) &&
+          incoming().status in ['pending', 'escalated'] &&
+          incoming().createdAt == request.time &&
+          incoming().lastUpdated == request.time &&
+          exists(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)) &&
+          (
+            isHotelOwner(hotelId) ||
+            isAdmin() ||
+            (
+              (!('guestUid' in incoming()) || incoming().guestUid == request.auth.uid) &&
+              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)).data.guestUid == request.auth.uid
+            )
+          );
+        allow update: if isSignedIn() &&
+          isValidId(hotelId) &&
+          isValidId(requestId) &&
+          isValidRequest(incoming()) &&
+          incoming().sessionId == existing().sessionId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().lastUpdated == request.time &&
+          (
+            (
+              (
+                (existing().status != 'completed' && isHotelOwner(hotelId)) ||
+                isAdmin()
+              ) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status',
+                'lastUpdated',
+                'department',
+                'priority',
+                'acknowledgedAt',
+                'completedAt',
+                'roomNumber'
+              ])
+            ) ||
+            (
+              existing().status in ['pending', 'acknowledged', 'in_progress', 'escalated'] &&
+              existing().roomNumber in ['Pending room #', 'Location needed', ''] &&
+              existing().guestUid == request.auth.uid &&
+              incoming().guestUid == existing().guestUid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['roomNumber', 'lastUpdated'])
+            ) ||
+            (
+              existing().status == 'pending' &&
+              existing().guestUid == request.auth.uid &&
+              incoming().guestUid == existing().guestUid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['quantity', 'description', 'lastUpdated'])
+            ) ||
+            (
+              existing().status == 'completed' &&
+              incoming().status == 'reopened' &&
+              existing().guestUid == request.auth.uid &&
+              incoming().guestUid == existing().guestUid &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'priority', 'lastUpdated'])
+            )
+          );
+        allow delete: if false;
+      }
+    }
+  }
+}

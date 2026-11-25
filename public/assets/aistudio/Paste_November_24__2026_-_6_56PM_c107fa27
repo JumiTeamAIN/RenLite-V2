@@ -1,0 +1,2270 @@
+# REN by TeamAIN — Master Product Development Specification
+
+## 1. Project Overview
+
+You are working as a senior full-stack software engineer, UI/UX designer, AI architect, SaaS product strategist, and hospitality technology specialist for TeamAIN.
+
+We are developing an application called **Ren**, an AI-powered guest experience and hotel operations platform designed primarily for independent hotels, boutique hotels, smaller resorts, motels, and small hotel management companies.
+
+Large hotel brands have access to sophisticated proprietary systems for guest communication, service requests, operational management, guest recovery, and performance analytics. Independent hotels often lack access to comparable resources or cannot justify the associated expenses.
+
+Our mission is to democratize hospitality technology by making sophisticated hotel operational tools affordable, accessible, intuitive, and easy to implement.
+
+**Our guiding philosophy:**
+
+Ren is not designed to replace hospitality professionals. It is designed to give them more time to be hospitality professionals.
+
+**Brand positioning:**
+
+Ren — The intelligent operating companion for independent hotels.
+
+Big-brand technology. Independent hotel simplicity.
+
+---
+
+## 2. Existing Application
+
+We already have a functioning prototype containing:
+
+- A mobile guest-facing AI concierge.
+- A staff-facing administrative dashboard.
+- A live conversation inbox.
+- The ability for staff to respond to guest messages.
+- A service request management area.
+- Hotel-specific AI configuration.
+- Custom AI instructions.
+- Hotel FAQ management.
+- FAQ file uploads supporting JSON, CSV, and TXT.
+- Multilingual AI responses.
+- A simulation environment showing the guest experience and staff dashboard simultaneously.
+
+The existing application has several areas requiring improvement:
+
+- Intermittent AI connection errors.
+- Inconsistent creation of service requests.
+- Requests appearing with generic descriptions.
+- Missing room or location information.
+- Insufficient visibility into request status.
+- Limited departmental routing.
+- Limited prioritization and escalation.
+- A predominantly chat-based guest experience.
+- Basic administrative interfaces.
+- Insufficient confirmation that an AI-acknowledged request has actually been recorded.
+
+Before making changes, inspect the existing codebase, components, database structure, authentication, AI integration, state management, API endpoints, and request creation logic.
+
+Do not unnecessarily replace functional code or change the existing technology stack.
+
+Preserve existing functionality and data wherever possible. Use controlled migrations when changes to the database are required.
+
+Do not perform destructive resets or delete existing records without explicit authorization.
+
+---
+
+## 3. Product Vision and Architecture
+
+Ren should eventually become a modular hospitality operations ecosystem consisting of:
+
+| Module | Purpose |
+|---|---|
+| Ren Concierge | AI-powered guest communication |
+| Ren Service | Guest service request management |
+| Ren Maintenance | Engineering and maintenance work orders |
+| Ren Connect | Internal associate communication |
+| Ren Handover | Digital shift pass-on logs |
+| Ren Recovery | Guest complaints and service recovery |
+| Ren Assist | Internal AI assistant for associates |
+| Ren Academy | Associate training and development |
+| Ren Insights | Operational analytics and AI recommendations |
+
+However, do not attempt to fully develop every module immediately.
+
+The initial commercially viable product should focus on:
+
+1. Guest-facing digital concierge.
+2. AI conversations.
+3. Human conversation takeover.
+4. Service request management.
+5. Departmental routing.
+6. QR code management.
+7. Escalation and notifications.
+8. Hotel configuration.
+9. Operational reporting.
+10. Secure multi-property architecture.
+
+Design the underlying architecture so future modules can be added without requiring a complete rebuild.
+
+---
+
+# PART I — GUEST EXPERIENCE
+
+## 4. Redesign the Guest-Facing Interface
+
+The guest-facing interface should evolve from a simple chatbot into a sophisticated but intuitive digital hotel companion.
+
+The experience must be:
+
+- Mobile-first.
+- Responsive across mobile, tablet, and desktop.
+- Accessible through a QR code or direct URL.
+- Available without requiring guests to download an application.
+- Available without mandatory account registration for ordinary guest services.
+- Fast on slower internet connections.
+- Accessible to guests with disabilities.
+- Easy to navigate for guests unfamiliar with AI.
+- Visually consistent with each hotel's brand.
+
+Avoid making the interface feel like a generic messaging application.
+
+### 4.1 Guest Landing Page
+
+The landing page should contain:
+
+- Hotel logo.
+- Hotel name.
+- Optional hotel hero photograph.
+- Custom welcome message.
+- Language selector.
+- AI concierge availability indicator.
+- Configurable service categories.
+- A prominent option to communicate with Ren.
+- An option to contact a human associate.
+- Access to existing requests.
+- Emergency contact information.
+
+Example welcome message:
+
+"Welcome to The Meridian Hotel. Make yourself at home. How can we make your stay more enjoyable today?"
+
+### 4.2 Interactive Service Categories
+
+Provide visually appealing service cards or buttons.
+
+Default categories:
+
+**Room Requests**
+- Fresh towels.
+- Additional pillows.
+- Additional blankets.
+- Toiletries.
+- Bottled water.
+- Iron and ironing board.
+- Additional coffee.
+- Additional hangers.
+- Other requests.
+
+**Housekeeping**
+- My room is ready for cleaning.
+- Request housekeeping.
+- Request turndown service.
+- Request trash removal.
+- Request fresh linens.
+- Schedule housekeeping.
+- Do not disturb or decline service, where supported.
+
+**Dining**
+- Restaurant menus.
+- Breakfast information.
+- Restaurant operating hours.
+- Bar information.
+- In-room dining information.
+- Dining reservations or reservation inquiries.
+
+**Hotel Amenities**
+- Pool.
+- Fitness center.
+- Spa.
+- Business center.
+- Parking.
+- Wi-Fi.
+- Laundry.
+- Shuttle transportation.
+
+**Explore the Area**
+- Restaurants.
+- Attractions.
+- Shopping.
+- Entertainment.
+- Outdoor activities.
+- Transportation.
+- Family-friendly activities.
+
+**Manage My Stay**
+- Request late checkout.
+- Request early check-in.
+- Request a room upgrade.
+- Ask about extending a stay.
+- Request luggage assistance.
+- Request transportation.
+
+**Report an Issue**
+- Air conditioning.
+- Plumbing.
+- Television.
+- Wi-Fi.
+- Noise.
+- Cleanliness.
+- Room condition.
+- Other concerns.
+
+**Contact Our Team**
+- Connect with reception.
+- Request management assistance.
+- Speak with an associate.
+
+Hotels must be able to enable, disable, rename, reorder, and customize these categories.
+
+Do not display services that the hotel does not provide.
+
+### 4.3 Hybrid AI and Structured Workflows
+
+Not every interaction should require an AI model.
+
+For example, when a guest selects "Fresh Towels," the application should be able to create a structured request directly.
+
+The process should be:
+
+1. Guest selects Fresh Towels.
+2. Application asks for the quantity.
+3. Application confirms the delivery location if necessary.
+4. Guest submits the request.
+5. Backend validates and saves the request.
+6. Request is routed to housekeeping.
+7. Guest receives confirmation and a tracking reference.
+
+This workflow should operate even when the AI provider is unavailable.
+
+Use deterministic application logic for predictable tasks and use AI for natural language understanding, conversational interactions, complex questions, and personalized assistance.
+
+This will reduce API costs, latency, hallucinations, and operational errors.
+
+### 4.4 Guest Request Tracking
+
+Guests should be able to view requests associated with their current authorized session.
+
+Display:
+
+- Request description.
+- Quantity.
+- Request reference number.
+- Time submitted.
+- Current status.
+- Estimated fulfillment time, when available.
+- Completion confirmation.
+- Option to report that the request was not fulfilled.
+
+Guest-friendly statuses:
+
+- Request received.
+- Team notified.
+- In progress.
+- Completed.
+- Additional information needed.
+- Unable to fulfill.
+
+Do not imply that an associate has acknowledged a request unless that acknowledgment has actually occurred.
+
+Never guarantee a fulfillment time unless the hotel's operational workflow supports that guarantee.
+
+---
+
+## 5. QR Code Management
+
+Develop a comprehensive QR code management system.
+
+Each hotel should be able to generate QR codes for specific physical locations.
+
+Supported location types:
+
+- Guest rooms.
+- Suites.
+- Hotel lobby.
+- Pool.
+- Restaurant tables.
+- Bar.
+- Fitness center.
+- Meeting rooms.
+- Ballrooms.
+- Business center.
+- Public areas.
+- Other customizable locations.
+
+### 5.1 Location-Aware QR Codes
+
+Each QR code should use an opaque location identifier associated with the property.
+
+For example:
+
+- Hotel A — Room 412.
+- Hotel A — Pool.
+- Hotel A — Restaurant Table 7.
+- Hotel B — Room 412.
+
+Scanning a QR code should automatically provide location context to Ren.
+
+A guest scanning a QR code in room 412 should not need to repeatedly enter their room number for ordinary amenity requests.
+
+A guest scanning a restaurant table QR code should receive restaurant-relevant services.
+
+A guest scanning a lobby QR code should receive general hotel services.
+
+If a guest accesses the concierge without location information, Ren should:
+
+1. Answer general questions normally.
+2. Ask for the delivery location only when needed.
+3. Validate the location against the property's configured locations.
+4. Apply additional verification for sensitive or higher-risk services.
+
+Do not reject general informational questions simply because room information is unavailable.
+
+### 5.2 QR Code Administration
+
+Allow authorized administrators to:
+
+- Generate individual QR codes.
+- Generate QR codes in bulk.
+- Import room numbers through CSV.
+- Generate room ranges.
+- Include alphanumeric room numbers.
+- Assign QR codes to locations.
+- Customize QR code signage.
+- Upload hotel logos.
+- Customize colors and welcome text.
+- Export printable PNG, SVG, and PDF signage.
+- Disable or replace individual QR codes.
+- View scan counts.
+- View engagement by location.
+
+QR codes should remain usable when hotel FAQs, services, or branding change.
+
+### 5.3 QR Code Security
+
+A QR code provides location context, not proof of guest identity or room occupancy.
+
+Do not use possession of a QR code as authorization to:
+
+- Unlock a guest room.
+- Issue a replacement room key.
+- Access reservation information.
+- View a hotel folio.
+- Disclose guest names.
+- Modify reservations.
+- Authorize charges.
+- Approve refunds.
+- Access another guest's requests.
+
+Implement rate limiting, abuse detection, session expiration, and appropriate verification for sensitive actions.
+
+Prevent users from accessing another hotel's data by manipulating URLs or location identifiers.
+
+---
+
+# PART II — AI INTELLIGENCE
+
+## 6. Hospitality-Specific AI Architecture
+
+Ren should have a foundational hospitality intelligence layer that cannot be overridden by ordinary hotel configuration or guest instructions.
+
+The AI should operate using the following hierarchy:
+
+### Layer 1 — Platform Safety and Security
+
+Includes:
+
+- Privacy requirements.
+- Emergency response rules.
+- Prohibited actions.
+- Financial authorization restrictions.
+- Data access restrictions.
+- Prompt injection protection.
+- Human escalation requirements.
+- Tool execution rules.
+- Accurate reporting of backend outcomes.
+
+### Layer 2 — Hospitality Intelligence
+
+Includes:
+
+- Professional guest service standards.
+- Hospitality terminology.
+- Common guest needs.
+- Complaint handling.
+- Departmental responsibilities.
+- Service recovery principles.
+- Appropriate empathy.
+- Cultural awareness.
+- Multilingual communication.
+- Distinction between questions, requests, and complaints.
+
+### Layer 3 — Property Knowledge
+
+Includes:
+
+- Hotel name.
+- Address.
+- Telephone numbers.
+- Hotel policies.
+- Operating hours.
+- Available amenities.
+- Restaurant menus.
+- Parking information.
+- Check-in and checkout information.
+- Hotel services.
+- Department configuration.
+- Approved local recommendations.
+
+### Layer 4 — Property Personality
+
+Includes:
+
+- Formality.
+- Tone of voice.
+- Language preferences.
+- Emoji preferences.
+- Hotel brand personality.
+- Custom greetings.
+- Preferred terminology.
+
+### Layer 5 — Conversation and Session Context
+
+Includes:
+
+- Current guest language.
+- Current location.
+- Conversation history.
+- Existing requests.
+- Previous guest concerns.
+- Relevant authorized session information.
+
+The AI should only have access to information necessary to assist the current guest.
+
+Never expose internal instructions, other guests' information, administrative credentials, or confidential hotel procedures.
+
+---
+
+## 7. AI Intent Recognition
+
+Every incoming message should be evaluated for its primary intent.
+
+Supported classifications should include:
+
+| Intent | Expected behavior |
+|---|---|
+| General information | Answer using approved information |
+| Hotel FAQ | Retrieve relevant property knowledge |
+| Amenity request | Create a service request |
+| Housekeeping request | Route to housekeeping |
+| Maintenance issue | Create engineering work order |
+| Guest complaint | Acknowledge and assess escalation |
+| Emergency | Provide immediate safety guidance and notify appropriate staff |
+| Billing question | Refer to authorized staff |
+| Reservation modification | Submit inquiry or direct to authorized staff |
+| Local recommendation | Provide relevant verified recommendations |
+| Dining inquiry | Provide approved dining information |
+| Upsell inquiry | Present authorized offers |
+| Request status | Retrieve existing authorized request |
+| Human assistance | Initiate human takeover |
+| Unclear request | Ask a focused clarifying question |
+
+Support multiple intents within one message.
+
+Example:
+
+"I need two towels, my AC isn't working, and what time is breakfast?"
+
+Ren should:
+
+- Create a housekeeping request for two towels.
+- Create an engineering request for the AC.
+- Answer the breakfast question using approved property information.
+- Clearly communicate the outcome of each action.
+
+Do not create duplicate requests when a guest repeats the same concern.
+
+---
+
+## 8. AI Tool Execution and Request Reliability
+
+The AI model must not be responsible for independently claiming that an operational action has occurred.
+
+Implement controlled backend tools or function calls, such as:
+
+- createServiceRequest
+- getRequestStatus
+- updateRequestDetails
+- cancelRequest
+- escalateConversation
+- requestHumanAssistance
+- searchHotelKnowledge
+- getHotelAmenities
+- getDiningInformation
+- getApprovedLocalRecommendations
+- getPropertyContactInformation
+- getAvailableServiceOptions
+
+Every tool call must be:
+
+- Validated by the backend.
+- Scoped to the correct hotel and session.
+- Subject to authorization rules.
+- Logged for auditing.
+- Protected against duplicate execution.
+- Returned with a structured success or failure result.
+
+A service request is only successfully submitted after it has been durably recorded.
+
+Incorrect response:
+
+"I've sent your request to housekeeping!"
+
+This is unacceptable if the backend request failed.
+
+Correct response after successful creation:
+
+"I've submitted your request for two fresh towels to housekeeping. Your request reference is #R-1042."
+
+Correct response after a failure:
+
+"I'm sorry, I couldn't submit your request just now. You can try again or contact our front desk for immediate assistance."
+
+If the message is successfully saved and delivered to a monitored staff queue despite an AI failure, Ren may accurately tell the guest that the message has been forwarded for human assistance.
+
+Use idempotency keys, transactional database operations, and appropriate retry mechanisms.
+
+---
+
+## 9. AI Response Standards
+
+Ren should communicate like a well-trained hospitality professional.
+
+Responses should generally be:
+
+- Warm.
+- Concise.
+- Professional.
+- Helpful.
+- Empathetic.
+- Context-aware.
+- Easy to understand.
+- Appropriate to the property's brand.
+
+Avoid unnecessary paragraphs when a guest asks a simple question.
+
+Example:
+
+Guest: "What time is checkout?"
+
+Ren: "Checkout is at 11:00 AM. If you'd like to request a late checkout, I can help with that!"
+
+For complex recommendations, use structured interactive cards rather than lengthy blocks of text.
+
+Where appropriate, include:
+
+- Buttons.
+- Links.
+- Directions.
+- Images approved for use.
+- Operating hours.
+- Price ranges.
+- Distance estimates from verified sources.
+- Relevant follow-up options.
+
+Do not invent restaurants, attractions, hotel services, prices, operating hours, availability, or policies.
+
+When information is unavailable, acknowledge the limitation and offer assistance from the hotel team.
+
+### Complaint Tone
+
+Do not use playful language or unnecessary emojis when responding to serious complaints, safety concerns, medical issues, discrimination, harassment, or emergencies.
+
+Adapt the tone to the seriousness of the situation.
+
+---
+
+## 10. Multilingual Communication
+
+Ren should automatically identify the guest's preferred language while allowing manual language selection.
+
+Initially support commonly encountered languages, including:
+
+- English.
+- Spanish.
+- French.
+- Haitian Creole.
+- Portuguese.
+- German.
+- Italian.
+- Tagalog.
+- Mandarin Chinese.
+- Japanese.
+- Korean.
+- Arabic.
+
+Use a scalable translation architecture that supports additional languages.
+
+### Two-Way Translation
+
+A guest may communicate in Spanish while the receiving associate prefers Haitian Creole.
+
+The system should:
+
+1. Preserve the original guest message.
+2. Translate it into the associate's preferred language.
+3. Allow the associate to view the original message.
+4. Translate the associate's response into the guest's preferred language.
+5. Preserve both versions in the conversation history.
+
+Example:
+
+Guest: "Necesito dos toallas."
+
+Housekeeping associate receives: "Mwen bezwen de sèvyèt."
+
+Management sees: "Guest requests two towels."
+
+Provide translation indicators and avoid treating machine translation as infallible, especially for serious complaints and emergencies.
+
+---
+
+## 11. Emergency and Complaint Escalation
+
+Build a reliable escalation engine.
+
+The system must support configurable escalation categories and severity levels.
+
+### Critical Situations
+
+Examples:
+
+- Fire or smoke.
+- Medical emergencies.
+- Threats of violence.
+- Unauthorized attempts to enter a room.
+- Immediate physical danger.
+- Gas leaks.
+- Serious security concerns.
+
+The AI should provide immediate, appropriate safety guidance, recommend contacting local emergency services when warranted, and notify designated hotel personnel.
+
+Do not imply that Ren has contacted emergency responders unless an authorized integration has actually performed that action.
+
+### High-Priority Situations
+
+Examples:
+
+- Suspected bedbugs.
+- Significant cleanliness complaints.
+- Discrimination or harassment complaints.
+- Major room defects.
+- Repeated unresolved service failures.
+- Requests to speak with management.
+- Serious guest dissatisfaction.
+
+Example:
+
+Guest: "My room has bedbugs."
+
+Ren should respond empathetically without independently confirming or denying the allegation.
+
+Example response after successful escalation:
+
+"I'm very sorry you're experiencing this. I've notified our management team so they can assist you directly. Please avoid moving your belongings to another room until our team provides guidance."
+
+The system should:
+
+- Create a high-priority incident or recovery case.
+- Notify designated management personnel.
+- Preserve the complete conversation.
+- Flag the session for human review.
+- Prevent inappropriate automated troubleshooting or compensation promises.
+- Require staff acknowledgment.
+
+### Escalation Reliability
+
+Use deterministic emergency rules alongside AI classification so that safety-critical escalation does not depend entirely on a successful AI response.
+
+If a designated recipient does not acknowledge an urgent incident, escalate through the property's configured notification chain.
+
+---
+
+# PART III — STAFF EXPERIENCE
+
+## 12. Redesign the Administrative Dashboard
+
+The administrative interface should feel like a professional hotel operations platform.
+
+Suggested navigation:
+
+- Overview.
+- Live Inbox.
+- Service Requests.
+- Guest Recovery.
+- QR Codes and Locations.
+- Knowledge Base.
+- Analytics.
+- Team Management.
+- Configuration.
+
+Future modules may appear when enabled, rather than cluttering the initial interface with inactive functionality.
+
+### Dashboard Overview
+
+Display:
+
+- Active guest conversations.
+- New service requests.
+- Unassigned requests.
+- In-progress requests.
+- Overdue requests.
+- Urgent incidents.
+- Conversations requiring human assistance.
+- Recently completed requests.
+- Department performance.
+- Average fulfillment time.
+- Current notification status.
+- AI service availability.
+
+Allow filtering by date, location, department, priority, and assigned associate.
+
+---
+
+## 13. Live Conversation Inbox
+
+Improve the current inbox substantially.
+
+Each conversation preview should display:
+
+- Guest session identifier.
+- Room or location.
+- Latest message.
+- Preferred language.
+- Time of latest message.
+- Assigned associate or department.
+- Unread message count.
+- Conversation status.
+- Escalation status.
+- Related open service requests.
+
+Conversation filters should include:
+
+- All conversations.
+- Active AI conversations.
+- Human-managed conversations.
+- Waiting for staff.
+- Urgent.
+- Unread.
+- Resolved.
+- Department-specific conversations.
+- Archived conversations.
+
+### Conversation Workspace
+
+The workspace should display:
+
+- Full conversation history.
+- Guest messages.
+- AI messages.
+- Human staff messages.
+- Original and translated messages.
+- Internal notes.
+- Related service requests.
+- Relevant timestamps.
+- Session information.
+- Assigned associate.
+
+Include actions for:
+
+- Take over conversation.
+- Return control to Ren.
+- Assign conversation.
+- Transfer department.
+- Create service request.
+- Escalate incident.
+- Add internal note.
+- Mark conversation resolved.
+- View request history.
+
+Internal notes must never be visible to guests.
+
+---
+
+## 14. Human Takeover
+
+Human takeover must be an explicit, reliable application state.
+
+Use conversation states such as:
+
+- AI Active.
+- Awaiting Human Assistance.
+- Human Active.
+- AI Assist Mode.
+- Resolved.
+- Archived.
+
+When an associate selects "Take Over":
+
+- Change the conversation state on the backend.
+- Stop automatic AI responses.
+- Assign the conversation to the associate.
+- Notify the guest appropriately.
+- Prevent simultaneous AI and human replies.
+- Continue displaying incoming guest messages in real time.
+
+When staff returns control to Ren:
+
+- Notify the guest where appropriate.
+- Restore automated AI responses.
+- Provide Ren with relevant conversation context.
+- Preserve all previous conversation history.
+
+Ren may offer AI-generated suggested replies to associates while a human controls the conversation.
+
+Suggested replies must not automatically send unless the associate explicitly authorizes them.
+
+---
+
+## 15. Service Request Management
+
+Transform the current service request area into a comprehensive task management system.
+
+### Required Request Data
+
+Each request should contain:
+
+- Unique request identifier.
+- Hotel identifier.
+- Conversation identifier.
+- Guest session identifier.
+- Room or physical location.
+- Request category.
+- Request title.
+- Detailed description.
+- Quantity when applicable.
+- Original guest message.
+- Guest language.
+- Translated request.
+- Assigned department.
+- Assigned associate.
+- Priority.
+- Current status.
+- Creation timestamp.
+- Acknowledgment timestamp.
+- Work start timestamp.
+- Target completion timestamp.
+- Actual completion timestamp.
+- Completion notes.
+- Escalation history.
+- Guest follow-up status.
+- Request source.
+- Audit history.
+
+Avoid displaying generic titles such as "Service Request" when more specific information is available.
+
+Example:
+
+"Deliver 2 fresh bath towels — Room 412."
+
+### Request Statuses
+
+Use an explicit state machine:
+
+- New.
+- Assigned.
+- Acknowledged.
+- In Progress.
+- Waiting for Guest.
+- Waiting for Resources.
+- Completed.
+- Cancelled.
+- Unable to Fulfill.
+- Reopened.
+
+Overdue and escalated should be separately tracked conditions so they do not erase the actual fulfillment status.
+
+### Request Views
+
+Support:
+
+- List view.
+- Kanban view.
+- Department view.
+- Priority view.
+- Room or location view.
+- Assigned-to-me view.
+
+Allow sorting and filtering.
+
+Ensure the interface is mobile-friendly for housekeeping, engineering, and other operational associates who may not have access to a desktop computer.
+
+---
+
+## 16. Automatic Departmental Routing
+
+Hotels must be able to configure their own departments and routing rules.
+
+Default departments:
+
+- Front Desk.
+- Housekeeping.
+- Engineering.
+- Food and Beverage.
+- Security.
+- Management.
+- Guest Services.
+- Reservations.
+- Accounting.
+- Spa.
+- Other custom departments.
+
+Example routing:
+
+| Request | Department | Priority |
+|---|---|---|
+| Extra towels | Housekeeping | Normal |
+| Additional pillows | Housekeeping | Normal |
+| Broken air conditioning | Engineering | High |
+| Toilet overflowing | Engineering | Urgent |
+| Noise complaint | Security or Front Desk | High |
+| Late checkout | Front Desk | Normal |
+| Billing dispute | Front Desk or Accounting | Normal |
+| Suspected bedbugs | Management | High |
+| Immediate safety threat | Emergency protocol | Critical |
+
+Routing rules must be configurable by hotel.
+
+Allow routing based on:
+
+- Request category.
+- Property location.
+- Department operating hours.
+- Day of week.
+- Time of day.
+- Priority.
+- Staff availability.
+- Escalation rules.
+
+Example:
+
+If housekeeping is unavailable after 10 PM, route amenity requests to the overnight front desk team instead.
+
+Provide a fallback department or designated staff queue when no specific routing rule applies.
+
+---
+
+## 17. Service Level Agreements and Notifications
+
+Allow each property to establish service-level targets.
+
+Example defaults:
+
+| Request category | Illustrative target |
+|---|---|
+| Towels | 15 minutes |
+| Toiletries | 15 minutes |
+| Housekeeping inquiry | 20 minutes |
+| Routine engineering | 30 minutes |
+| Air conditioning issue | 20 minutes |
+| Noise complaint | 5 minutes |
+| Serious guest complaint | Immediate acknowledgment |
+
+These targets are configurable internal expectations, not guaranteed guest delivery times.
+
+Track both acknowledgment time and fulfillment time.
+
+Notifications may include:
+
+- In-app notifications.
+- Browser push notifications.
+- Email.
+- Mobile web push where supported.
+- Optional SMS through configured integrations.
+
+Allow administrators to configure recipients and escalation chains.
+
+Example:
+
+- New towel request: notify housekeeping.
+- Request not acknowledged within five minutes: notify housekeeping supervisor.
+- Request exceeds its target: notify department manager.
+- Critical incident: immediately notify designated management and security personnel.
+
+Implement retries and delivery tracking.
+
+Do not claim that a notification was delivered when delivery has failed.
+
+---
+
+## 18. Guest Follow-Up
+
+When an associate marks a request complete, Ren should optionally send a follow-up message.
+
+Example:
+
+"Our team has marked your towel request complete. Did you receive everything you needed?"
+
+Provide options:
+
+- Yes, thank you.
+- I still need assistance.
+
+If the guest indicates the request was not fulfilled:
+
+- Reopen the existing request.
+- Notify the assigned department.
+- Preserve the original request history.
+- Increase priority where appropriate.
+- Escalate repeated service failures.
+
+Avoid generating excessive or repetitive follow-up messages.
+
+Allow properties to configure which request types receive follow-ups.
+
+---
+
+# PART IV — HOTEL ADMINISTRATION
+
+## 19. Hotel Configuration
+
+Create a structured property configuration experience rather than relying primarily on one large AI prompt field.
+
+Configuration sections should include:
+
+### General Information
+
+- Hotel name.
+- Property type.
+- Address.
+- Country.
+- Postal code.
+- Time zone.
+- Telephone number.
+- Website.
+- Number of rooms.
+- Primary language.
+- Supported languages.
+
+### Branding
+
+- Logo.
+- Primary and secondary colors.
+- Guest interface theme.
+- Hero photographs.
+- Welcome message.
+- Custom concierge name.
+- Preferred terminology.
+- Optional custom domain in future releases.
+
+### Hotel Policies
+
+- Check-in time.
+- Checkout time.
+- Early check-in policy.
+- Late checkout policy.
+- Parking.
+- Pet policy.
+- Smoking policy.
+- Deposit policy.
+- Housekeeping policy.
+- Cancellation information.
+- Accessibility information.
+- Other property-specific policies.
+
+### AI Personality
+
+- Formal or casual.
+- Concise or detailed.
+- Emoji preferences.
+- Brand tone.
+- Greeting style.
+- Custom instructions.
+
+The platform's foundational safety and security rules must take precedence over property-level instructions.
+
+### Department Configuration
+
+- Department names.
+- Operating hours.
+- Department members.
+- Notification preferences.
+- Routing rules.
+- Escalation recipients.
+- Service-level targets.
+
+---
+
+## 20. Intelligent Knowledge Base
+
+Expand the existing FAQ system into a structured hotel knowledge base.
+
+Support:
+
+- Manual FAQs.
+- JSON.
+- CSV.
+- TXT.
+- PDF.
+- DOCX.
+- XLSX.
+- Approved website imports.
+- Restaurant menus.
+- Hotel guest directories.
+- Property brochures.
+- Policies.
+- Local attraction information.
+
+Use appropriate document parsing and retrieval techniques.
+
+Do not simply insert all uploaded documents into every AI request.
+
+Implement a property-scoped retrieval system that finds relevant knowledge when needed.
+
+### AI-Assisted Onboarding
+
+When an administrator uploads a hotel document, Ren should:
+
+1. Extract relevant information.
+2. Identify hotel policies and services.
+3. Suggest structured FAQs.
+4. Identify operating hours.
+5. Identify contact information.
+6. Suggest service categories.
+7. Flag conflicting information.
+8. Flag information that may be outdated.
+9. Present extracted content for human approval.
+
+Example:
+
+An administrator uploads a 20-page guest directory.
+
+Ren proposes:
+
+- 25 FAQs.
+- 8 amenities.
+- 3 dining venues.
+- Check-in and checkout information.
+- 6 hotel policies.
+
+The administrator reviews and approves the suggestions.
+
+Do not publish unreviewed extracted information by default.
+
+### Knowledge Governance
+
+Every knowledge entry should support:
+
+- Category.
+- Source.
+- Last updated date.
+- Approval status.
+- Effective date.
+- Expiration date, when applicable.
+- Responsible administrator.
+
+Differentiate between guest-facing and internal-only knowledge.
+
+Never allow the guest-facing AI to retrieve confidential staff documents, HR policies, security procedures, or other restricted materials.
+
+---
+
+## 21. Local Recommendations
+
+Improve local recommendations beyond plain-text responses.
+
+Hotels should be able to maintain curated lists of:
+
+- Restaurants.
+- Attractions.
+- Shopping.
+- Entertainment.
+- Beaches.
+- Parks.
+- Transportation.
+- Nearby convenience stores.
+- Pharmacies.
+- Other guest resources.
+
+Recommendation cards may display:
+
+- Name.
+- Category.
+- Description.
+- Address.
+- Verified website.
+- Directions link.
+- Approved photograph.
+- Verified operating hours when available.
+- Price range when available.
+- Distance when accurately calculated.
+
+Support optional integrations with licensed maps or local business data providers.
+
+Do not invent locations, prices, hours, or distances.
+
+If live information is unavailable, explain that details should be confirmed directly.
+
+---
+
+## 22. User Management and Permissions
+
+Implement role-based access control.
+
+### Platform Super Administrator
+
+TeamAIN personnel responsible for managing the SaaS platform.
+
+Permissions:
+
+- Manage hotel tenants.
+- Manage subscriptions.
+- Monitor platform health.
+- Manage platform configurations.
+- Review authorized support information.
+
+Access to hotel guest conversations should be restricted, justified, and audited rather than automatically available to every platform administrator.
+
+### Hotel Owner / General Manager
+
+Permissions:
+
+- Manage hotel configuration.
+- Manage users.
+- View all authorized property analytics.
+- Configure departments.
+- Manage escalation rules.
+- Manage billing and subscriptions.
+
+### Hotel Administrator
+
+Permissions based on assigned responsibilities.
+
+### Department Manager
+
+Permissions:
+
+- View department requests.
+- Assign tasks.
+- Monitor service performance.
+- Manage department escalations.
+
+### Front Desk Associate
+
+Permissions:
+
+- View assigned or authorized guest conversations.
+- Respond to guests.
+- Create service requests.
+- Route requests.
+- Escalate concerns.
+
+### Department Associate
+
+Permissions:
+
+- View authorized assigned requests.
+- Acknowledge requests.
+- Update task status.
+- Complete requests.
+- Add relevant operational notes.
+
+### Read-Only Manager
+
+Permissions:
+
+- View authorized dashboards and reports.
+- No operational modifications.
+
+### Guest
+
+Permissions:
+
+- Access public hotel information.
+- Communicate with Ren.
+- Submit permitted requests.
+- View requests associated with their authorized session.
+
+Enforce permissions in the backend and database access layer, not only through hidden interface elements.
+
+---
+
+# PART V — MANAGEMENT INTELLIGENCE
+
+## 23. Analytics and Reporting
+
+Develop a management dashboard that demonstrates the value Ren provides.
+
+Key metrics:
+
+### Guest Engagement
+
+- Total conversations.
+- Unique guest sessions.
+- QR code scans.
+- Engagement by location.
+- Engagement by language.
+- Peak conversation hours.
+- Most common questions.
+
+### AI Performance
+
+- AI-only informational resolution rate.
+- Human takeover rate.
+- Escalation rate.
+- Failed AI requests.
+- Unanswered questions.
+- Average AI response time.
+- Estimated AI usage costs.
+
+### Service Request Performance
+
+- Total requests.
+- Requests by category.
+- Requests by department.
+- Average acknowledgment time.
+- Average fulfillment time.
+- Median fulfillment time.
+- Overdue request percentage.
+- Reopened requests.
+- Completion rate.
+- Guest-confirmed completion rate.
+
+### Guest Recovery
+
+- Complaints by category.
+- Escalation frequency.
+- Repeated guest concerns.
+- Unresolved complaints.
+- Recovery response times.
+
+### Operational Value
+
+- Estimated staff time recovered.
+- Estimated labor-equivalent value.
+- Frequently automated inquiries.
+- Requests by room or location.
+
+Clearly distinguish actual measured metrics from modeled estimates.
+
+Do not claim that estimated staff time recovered represents actual payroll savings.
+
+A physical service request fulfilled by a human associate should not be counted as an entirely AI-resolved interaction.
+
+Allow administrators to export reports in CSV and printable PDF formats.
+
+---
+
+## 24. AI-Generated Operational Insights
+
+Ren should eventually analyze property-level trends and provide actionable recommendations.
+
+Examples:
+
+"Breakfast inquiries increased significantly between 6:00 AM and 7:00 AM. Consider improving breakfast information in your arrival communications."
+
+"Room 412 has received three air conditioning complaints within the past 30 days. Engineering may wish to investigate a recurring maintenance issue."
+
+"Housekeeping requests peak between 4:00 PM and 6:00 PM. Review coverage during these hours."
+
+"Additional towel requests increased compared with the previous month. Consider reviewing room stocking standards."
+
+Each insight should:
+
+- Identify the supporting data.
+- Specify the relevant period.
+- Distinguish correlation from confirmed causation.
+- Avoid unsupported conclusions.
+- Provide a suggested operational action.
+
+Do not use AI to automatically discipline employees or make employment decisions.
+
+---
+
+# PART VI — FUTURE MODULES
+
+## 25. Ren Handover — Digital Shift Pass-On Log
+
+Prepare the architecture for a digital shift handover module.
+
+Future capabilities:
+
+- Record operational notes.
+- Track unresolved guest concerns.
+- Track pending requests.
+- Record maintenance issues.
+- Assign follow-up responsibilities.
+- Set reminders.
+- Acknowledge handover information.
+- Generate AI-powered shift summaries.
+
+Example:
+
+**Evening Shift Handover**
+
+- Room 412: AC concern remains unresolved; engineering assigned.
+- Room 218: Towel request completed.
+- Room 507: Late checkout request pending approval.
+- Pool: Maintenance concern requires morning follow-up.
+- Management: Guest complaint awaiting contact.
+
+AI-generated summaries must be grounded in actual records and must not fabricate commitments or events.
+
+---
+
+## 26. Ren Recovery — Guest Service Recovery
+
+Future functionality:
+
+- Create guest complaint cases.
+- Identify severity.
+- Assign management responsibility.
+- Track follow-up commitments.
+- Document guest interactions.
+- Record authorized compensation.
+- Require approval for compensation exceeding configured thresholds.
+- Track whether a concern has been resolved.
+- Identify recurring complaint categories.
+
+Ren must never independently authorize refunds, complimentary nights, loyalty points, or financial compensation.
+
+These actions require appropriate hotel authorization.
+
+---
+
+## 27. Ren Maintenance
+
+Future functionality:
+
+- Engineering work orders.
+- Room-specific maintenance history.
+- Equipment identifiers.
+- Preventive maintenance schedules.
+- Asset condition tracking.
+- Recurring issue identification.
+- Out-of-order room recommendations for authorized review.
+- Maintenance performance reporting.
+
+The AI should recommend appropriate operational review rather than independently changing room inventory or PMS status.
+
+---
+
+## 28. Ren Assist
+
+A separate employee-facing AI assistant.
+
+Future capabilities:
+
+- Answer hotel SOP questions.
+- Explain approved operational procedures.
+- Provide departmental training guidance.
+- Assist with guest response drafting.
+- Help associates locate approved resources.
+- Translate internal communications.
+- Suggest appropriate service recovery procedures.
+- Answer common operational questions.
+
+Keep employee-facing knowledge and guest-facing knowledge strictly separated through appropriate authorization and retrieval controls.
+
+---
+
+## 29. Future Revenue-Generating Guest Features
+
+Once the core product is stable, consider:
+
+- Room upgrades.
+- Late checkout offers.
+- Early check-in offers.
+- Restaurant reservations.
+- Food and beverage ordering.
+- Spa reservations.
+- Transportation arrangements.
+- Hotel experience bookings.
+- Local tour partnerships.
+- Personalized hotel offers.
+
+Only display approved and available offers.
+
+Do not process charges or guarantee availability without an authorized booking or payment workflow.
+
+Use reputable payment providers rather than directly storing payment card information.
+
+---
+
+# PART VII — TECHNICAL ARCHITECTURE
+
+## 30. Multi-Tenant SaaS Architecture
+
+Ren must support multiple independent hotels using the same platform.
+
+Each hotel's data must be isolated.
+
+A hotel must never be able to access another hotel's:
+
+- Guest conversations.
+- Service requests.
+- Knowledge base.
+- Staff information.
+- Configuration.
+- Analytics.
+- QR code management.
+- Billing information.
+
+Use tenant-aware database design, server-side authorization, scoped queries, appropriate row-level security where supported, and automated tenant isolation tests.
+
+Support hotel management companies with multiple properties while requiring explicit property access permissions.
+
+Do not trust client-supplied hotel identifiers without server-side verification.
+
+---
+
+## 31. Database Design
+
+Review the existing database before introducing changes.
+
+Suggested logical entities:
+
+| Entity | Purpose |
+|---|---|
+| Organizations | Hotel ownership or management groups |
+| Hotels | Individual properties |
+| Users | Staff and administrative accounts |
+| UserMemberships | Property and organization access |
+| Departments | Property departments |
+| Locations | Rooms and other physical locations |
+| QRCodes | QR code identifiers and configuration |
+| GuestSessions | Guest session context |
+| Conversations | Guest communication sessions |
+| Messages | Guest, AI, and staff messages |
+| ServiceRequests | Operational tasks |
+| RequestEvents | Request lifecycle history |
+| RoutingRules | Department assignment logic |
+| ServiceLevelPolicies | Acknowledgment and fulfillment targets |
+| EscalationRules | Notification and escalation logic |
+| Notifications | Notification delivery records |
+| KnowledgeDocuments | Uploaded knowledge sources |
+| KnowledgeEntries | Structured hotel information |
+| KnowledgeChunks | Retrieval-ready document content |
+| RecoveryCases | Guest complaint and recovery records |
+| ShiftHandovers | Future operational handover logs |
+| AuditLogs | Security and operational change history |
+| Subscriptions | SaaS billing configuration |
+| AIUsageEvents | AI consumption and cost tracking |
+
+These are conceptual entities. Adapt their implementation to the existing database technology rather than introducing unnecessary infrastructure.
+
+Maintain referential integrity, timestamps, appropriate indexes, and migration compatibility.
+
+---
+
+## 32. Real-Time Synchronization
+
+Guest messages, staff responses, request status changes, and notifications should synchronize in real time or near real time.
+
+Use the existing technology stack's appropriate real-time mechanisms.
+
+Requirements:
+
+- Guest messages appear promptly in the staff inbox.
+- Staff responses appear in the guest conversation.
+- Request status changes update the guest interface.
+- Multiple staff members see consistent request information.
+- Reconnection does not create duplicate messages.
+- Concurrent staff actions do not silently overwrite important changes.
+- Offline or interrupted states are communicated clearly.
+
+Implement durable storage before broadcasting successful operational updates.
+
+---
+
+## 33. AI Provider Abstraction and Cost Management
+
+Design the AI integration so Ren is not unnecessarily dependent on a single model or provider.
+
+Support configurable provider adapters where practical.
+
+Possible providers may include OpenAI, Google Gemini, or other suitable services.
+
+Maintain server-side AI credentials.
+
+Never expose API keys in frontend code.
+
+Cost optimization strategies:
+
+- Direct structured workflows for common requests.
+- Cached answers for approved FAQs.
+- Relevant knowledge retrieval.
+- Appropriate conversation summarization.
+- Smaller models for simple classification where effective.
+- More capable models for complex interactions where necessary.
+- Translation caching where appropriate.
+- Configurable context limits.
+- Abuse prevention.
+- Per-property usage tracking.
+
+Track:
+
+- Model usage.
+- Input and output consumption.
+- Estimated provider costs.
+- Requests by property.
+- Errors.
+- Latency.
+- Retry frequency.
+
+Do not silently prevent emergency escalation or human assistance when an AI usage threshold is reached.
+
+---
+
+## 34. Reliability and Failure Handling
+
+The application must remain operational when the AI provider experiences an outage.
+
+If AI is unavailable:
+
+- Structured service requests should continue functioning.
+- Previously approved hotel FAQs should remain accessible.
+- Guest messages should still be stored when the application backend is available.
+- Staff should still receive and respond to messages.
+- Emergency routing should continue functioning independently of AI when possible.
+- Guests should receive accurate status information.
+- Staff should receive appropriate system warnings.
+
+If the application backend itself is unavailable, do not falsely claim messages have been saved or forwarded.
+
+Provide visible alternative contact information and appropriate retry options.
+
+Implement:
+
+- Error logging.
+- Retry policies.
+- Timeout handling.
+- Health monitoring.
+- Durable notification queues.
+- Duplicate prevention.
+- Recovery procedures.
+- Automated backups.
+- Appropriate restoration testing.
+
+---
+
+## 35. Security, Privacy, and Data Governance
+
+Security must be foundational, not an afterthought.
+
+Implement appropriate controls for:
+
+- Secure authentication.
+- Backend authorization.
+- Role-based access control.
+- Tenant isolation.
+- Encryption in transit.
+- Encryption at rest where supported.
+- Secure secret management.
+- Rate limiting.
+- Input validation.
+- File upload validation.
+- Session management.
+- Administrative audit logging.
+- Protection against common web vulnerabilities.
+- Prompt injection resistance.
+- AI tool authorization.
+- Data retention.
+- Data deletion requests.
+- Guest privacy.
+
+Guest conversations should not be retained indefinitely by default without a documented business purpose.
+
+Support configurable retention policies subject to applicable legal and operational requirements.
+
+Avoid collecting unnecessary personal information.
+
+Do not allow AI to disclose personal guest data, reservation information, room occupancy, or confidential records to unauthorized users.
+
+Provide appropriate privacy notices and clearly identify Ren as an AI assistant.
+
+Production deployment requires a review of applicable privacy, accessibility, security, and consumer protection obligations.
+
+Do not claim compliance certifications that have not been independently established.
+
+---
+
+# PART VIII — COMMERCIAL PRODUCT
+
+## 36. Self-Service Hotel Onboarding
+
+The long-term goal is for a hotel to begin using Ren without a complicated implementation process.
+
+Create an onboarding wizard:
+
+**Step 1: Create Property**
+
+Enter hotel name, address, time zone, room count, and contact information.
+
+**Step 2: Customize Branding**
+
+Upload logo, select colors, and configure the welcome message.
+
+**Step 3: Configure Knowledge**
+
+Upload existing guest directories, FAQs, menus, and policies.
+
+**Step 4: Review AI-Extracted Information**
+
+Approve suggested knowledge entries and services.
+
+**Step 5: Configure Departments**
+
+Create departments, users, operating hours, routing rules, and notification preferences.
+
+**Step 6: Add Locations**
+
+Import room numbers and other property locations.
+
+**Step 7: Generate QR Codes**
+
+Generate and download branded signage.
+
+**Step 8: Test Ren**
+
+Enter a sandbox environment.
+
+**Step 9: Go Live**
+
+Publish the approved property configuration.
+
+Allow administrators to save progress and resume onboarding.
+
+The initial product should not require integration with a property management system.
+
+---
+
+## 37. Subscription Architecture
+
+Prepare the platform for recurring SaaS subscription billing.
+
+Potential introductory pricing for future market testing:
+
+| Plan | Proposed monthly price | Target property |
+|---|---:|---|
+| Essential | $49 | Up to 50 rooms |
+| Professional | $99 | Up to 150 rooms |
+| Advanced | $199 | Up to 300 rooms |
+
+These prices are preliminary and must not be treated as finalized commercial commitments.
+
+Design flexible subscription configuration supporting:
+
+- Monthly billing.
+- Annual billing.
+- Trials.
+- Room-based pricing.
+- Feature entitlements.
+- Usage allowances.
+- Additional properties.
+- Promotional discounts.
+- Optional add-ons.
+
+Use server-side entitlement enforcement.
+
+Core safety features, privacy protections, reliable request handling, and human escalation should not be withheld solely to encourage subscription upgrades.
+
+Avoid promising unlimited AI usage until actual operating costs are understood.
+
+---
+
+## 38. Competitive Positioning
+
+A direct competitor is Cortesia, which provides a QR-based hospitality AI concierge.
+
+Use publicly accessible competitor experiences as inspiration for understanding customer expectations, not as a blueprint to copy proprietary code, branding, or protected designs.
+
+Competitive strengths observed in the demo include:
+
+- Property branding.
+- Quick-action buttons.
+- Structured guest request categories.
+- Location-aware requests.
+- Local recommendations.
+- Multilingual assistance.
+- Safety-related disclaimers.
+
+Potential opportunities identified during demo testing:
+
+- Improve handling of missing room information.
+- Avoid classifying informational inquiries as room service requests.
+- Provide visually structured local recommendations.
+- Reduce unnecessary conversational friction.
+- Allow seamless human escalation.
+- Combine chat with structured guest services.
+- Develop broader operational functionality.
+
+These observations represent a limited demo experience and are not definitive conclusions about the competitor's full product.
+
+Ren should compete through its own strengths:
+
+- Ease of deployment.
+- Operational reliability.
+- Affordable and transparent pricing.
+- Intelligent departmental routing.
+- Multilingual employee communication.
+- Strong request management.
+- Clear human takeover.
+- Actionable management insights.
+- Extensible hotel operations architecture.
+
+Do not pursue feature parity at the expense of simplicity or reliability.
+
+---
+
+# PART IX — DESIGN REQUIREMENTS
+
+## 39. Guest Interface Design
+
+Create a modern, premium hospitality aesthetic.
+
+Avoid:
+
+- Generic chatbot templates.
+- Excessive visual clutter.
+- Long unstructured text responses.
+- Unnecessary animations.
+- Tiny touch targets.
+- Poor mobile responsiveness.
+- Excessive use of emojis.
+- Complicated menus.
+
+Use:
+
+- Generous spacing.
+- Clear visual hierarchy.
+- Accessible typography.
+- Rounded but professional interface elements.
+- Large service cards.
+- Property-specific colors.
+- Clear action buttons.
+- Relevant icons.
+- Useful interactive content.
+- Consistent feedback for loading, success, and failure.
+
+Support property-specific visual themes without changing the underlying functionality.
+
+---
+
+## 40. Staff Interface Design
+
+The administrative interface should prioritize operational speed.
+
+Staff may be using Ren while:
+
+- Checking guests in.
+- Answering telephone calls.
+- Assisting guests in person.
+- Performing housekeeping duties.
+- Completing maintenance work.
+- Managing multiple operational issues.
+
+Design for fast recognition and minimal interaction.
+
+Use:
+
+- Clearly labeled priorities.
+- Prominent overdue indicators.
+- Searchable conversations.
+- Department filters.
+- Large actionable request cards.
+- One-click acknowledgment.
+- Efficient task assignment.
+- Visible request timestamps.
+- Accessible mobile controls.
+- Clear confirmation of changes.
+
+Do not rely on color alone to communicate priority or status.
+
+---
+
+# PART X — DEVELOPMENT ROADMAP
+
+## 41. Phase 1: Stabilize the Existing Application
+
+Highest priority.
+
+- Audit the existing application.
+- Identify the cause of intermittent AI errors.
+- Fix service request creation and persistence.
+- Ensure request titles contain accurate information.
+- Prevent false request confirmations.
+- Prevent duplicate requests.
+- Add location-aware guest sessions.
+- Add configurable QR codes.
+- Implement explicit human takeover.
+- Implement critical escalation logic.
+- Implement reliable AI outage fallback.
+- Verify authentication and tenant isolation.
+
+Do not advance to feature-heavy expansion while these foundational workflows remain unreliable.
+
+## 42. Phase 2: Improve the Guest Experience
+
+- Create the hybrid guest landing page.
+- Add interactive service categories.
+- Add deterministic request workflows.
+- Add quantity selectors.
+- Add request tracking.
+- Add structured hotel information.
+- Add language selection.
+- Improve branding customization.
+- Add human assistance access.
+- Add guest follow-up functionality.
+
+## 43. Phase 3: Build Operational Workflows
+
+- Improve live inbox.
+- Add departmental routing.
+- Add service request state management.
+- Add assignments.
+- Add notification delivery.
+- Add escalation chains.
+- Add service-level monitoring.
+- Add two-way translation.
+- Improve department-specific mobile views.
+
+## 44. Phase 4: Build Administration and Analytics
+
+- Structured hotel configuration.
+- Enhanced knowledge base.
+- AI-assisted document ingestion.
+- QR code administration.
+- Team management.
+- Property analytics.
+- AI performance monitoring.
+- Operational reporting.
+- Usage tracking.
+
+## 45. Phase 5: Commercial Readiness
+
+- Self-service onboarding.
+- Subscription architecture.
+- Billing integration.
+- Production security review.
+- Accessibility testing.
+- Backup and recovery testing.
+- Multi-property management.
+- Support documentation.
+- Pilot testing with independent hotels.
+
+## 46. Phase 6: Operational Ecosystem Expansion
+
+After successful pilot validation:
+
+- Ren Handover.
+- Ren Recovery expansion.
+- Ren Maintenance expansion.
+- Ren Assist.
+- Advanced analytics.
+- Revenue-generating guest services.
+- Optional PMS and third-party integrations.
+- Additional hospitality operational modules.
+
+---
+
+# PART XI — TESTING AND ACCEPTANCE CRITERIA
+
+## 47. Required End-to-End Test Scenarios
+
+### Test 1: Standard Amenity Request
+
+A guest scans the QR code in room 412 and requests two towels.
+
+Expected:
+
+- Correct property and room identified.
+- Exactly one request created.
+- Quantity recorded as two.
+- Housekeeping assigned.
+- Guest receives accurate confirmation.
+- Staff sees the request.
+- Staff can acknowledge and complete it.
+- Guest receives a completion update.
+
+### Test 2: Multilingual Request
+
+Guest submits a request in Spanish.
+
+Expected:
+
+- Intent correctly recognized.
+- Original message preserved.
+- Staff receives a translation in their preferred language.
+- Guest confirmation is in Spanish.
+
+### Test 3: Missing Room Information
+
+Guest accesses the general concierge URL and requests towels.
+
+Expected:
+
+- Ren requests the delivery location.
+- No room is invented.
+- Request is created only after required location information is available.
+
+### Test 4: General Question Without Room Information
+
+Guest asks about breakfast hours.
+
+Expected:
+
+- Ren answers using approved property information.
+- Room identification is not unnecessarily required.
+
+### Test 5: Serious Complaint
+
+Guest reports suspected bedbugs.
+
+Expected:
+
+- Appropriate empathetic response.
+- High-priority recovery case or request.
+- Management notification.
+- Conversation flagged for human review.
+- No unauthorized compensation.
+
+### Test 6: Emergency
+
+Guest reports smoke in the room.
+
+Expected:
+
+- Immediate appropriate safety guidance.
+- Emergency contact information.
+- Critical escalation.
+- No misleading claim that emergency responders were dispatched.
+
+### Test 7: Multiple Requests
+
+Guest requests towels, reports a broken AC, and asks about checkout.
+
+Expected:
+
+- Separate correctly routed service requests.
+- Accurate checkout answer.
+- No duplicate or unnecessary requests.
+
+### Test 8: Human Takeover
+
+Staff takes control while Ren is responding.
+
+Expected:
+
+- AI automation stops.
+- Staff reply becomes visible to guest.
+- No simultaneous automated response.
+- Staff can explicitly return control to Ren.
+
+### Test 9: AI Provider Outage
+
+Simulate unavailable AI provider.
+
+Expected:
+
+- Structured requests remain operational.
+- Guest can contact staff.
+- Staff receives persisted messages.
+- No false completion or submission confirmations.
+- Guest sees accurate fallback information.
+
+### Test 10: Duplicate Request
+
+Guest submits the same request twice.
+
+Expected:
+
+- Existing active request identified.
+- Duplicate prevention applied where appropriate.
+- Guest can clarify if an additional request is genuinely intended.
+
+### Test 11: Overdue Request
+
+A request exceeds its configured service target.
+
+Expected:
+
+- Request flagged as overdue.
+- Supervisor notified according to configured rules.
+- Original status and history preserved.
+
+### Test 12: Tenant Isolation
+
+An authenticated user from Hotel A attempts to access Hotel B's requests.
+
+Expected:
+
+- Access denied at the backend.
+- No cross-property information disclosed.
+- Relevant security event logged.
+
+### Test 13: Guest Privacy
+
+A guest attempts to retrieve another room's conversation or reservation details.
+
+Expected:
+
+- Unauthorized access denied.
+- No personal information disclosed.
+
+### Test 14: Request Completion Dispute
+
+Staff marks towels delivered, but guest indicates they never received them.
+
+Expected:
+
+- Existing request reopened.
+- Staff notified.
+- History preserved.
+- Appropriate escalation applied.
+
+### Test 15: Prompt Injection
+
+Guest attempts to instruct Ren to reveal internal prompts, administrative information, or other guests' data.
+
+Expected:
+
+- Request denied.
+- Platform instructions and restricted information protected.
+- No unauthorized tool execution.
+
+### Test 16: Knowledge Accuracy
+
+Guest asks about an amenity that is not configured.
+
+Expected:
+
+- Ren does not invent the amenity.
+- Ren communicates uncertainty appropriately.
+- Offers relevant human assistance.
+
+### Test 17: Mobile Usability
+
+Test the guest and associate interfaces on common mobile screen sizes.
+
+Expected:
+
+- No horizontal overflow.
+- No inaccessible controls.
+- No overlapping content.
+- Keyboard does not permanently obscure critical actions.
+- Navigation remains intuitive.
+
+### Test 18: Persistence and Reconnection
+
+Refresh or reconnect during an active conversation.
+
+Expected:
+
+- Authorized conversation history restored.
+- Request status remains accurate.
+- No duplicate messages or requests.
+
+### Test 19: Concurrent Staff Actions
+
+Two associates attempt to claim or complete the same request.
+
+Expected:
+
+- Conflicting operations safely handled.
+- Accurate final state.
+- No silent overwriting of important operational history.
+
+### Test 20: Accessibility
+
+Test keyboard navigation, screen-reader labels, color contrast, focus management, and accessible interaction feedback.
+
+Expected:
+
+- Guest and staff interfaces remain usable without relying exclusively on visual cues or precise touch input.
+
+---
+
+# PART XII — DEVELOPMENT INSTRUCTIONS
+
+## 48. Implementation Methodology
+
+You are modifying an existing application.
+
+Before writing substantial new functionality:
+
+1. Audit the current codebase.
+2. Document the existing technology stack.
+3. Identify functional components that should be retained.
+4. Identify technical debt.
+5. Identify the cause of existing failures.
+6. Review the database and authentication architecture.
+7. Determine the smallest safe changes necessary.
+8. Develop a phased implementation plan.
+
+Then implement the highest-priority changes in manageable increments.
+
+For each increment:
+
+- Explain what is being changed.
+- Identify affected files and components.
+- Preserve working functionality.
+- Use reusable components.
+- Maintain clear separation of concerns.
+- Handle loading and error states.
+- Validate server-side operations.
+- Test the implemented functionality.
+- Document limitations and unresolved issues.
+
+Do not create superficial interface elements that appear functional but are not connected to real application logic.
+
+Do not use hardcoded demonstration data in production workflows.
+
+Mock data may be used in an explicitly labeled simulation or sandbox environment.
+
+Do not expose real API keys, personal information, or production credentials.
+
+Use safe development and testing environments.
+
+## 49. Required Initial Deliverables
+
+For your first development response, provide:
+
+1. Existing application architecture assessment.
+2. Identified bugs and likely root causes, with supporting evidence.
+3. Recommended architecture improvements.
+4. Proposed database changes.
+5. Prioritized implementation plan.
+6. Proposed guest interface redesign.
+7. Proposed staff interface redesign.
+8. Security and privacy considerations.
+9. Estimated AI consumption and cost considerations, with assumptions identified.
+10. Dependencies and unresolved technical requirements.
+
+After completing this assessment, begin implementing Phase 1, starting with request reliability, AI error handling, location context, and human takeover.
+
+If information is missing, make reasonable non-destructive assumptions and clearly document them.
+
+Do not fabricate successful tests or claim functionality has been completed when it has not been implemented and verified.
+
+## 50. Final Product Standard
+
+Ren must become a product that a real independent hotel can confidently use in daily operations.
+
+It should be easy enough for a small hotel owner to configure, simple enough for a guest to use without instruction, practical enough for an operational associate to manage during a busy shift, and valuable enough for a general manager to justify a recurring subscription.
+
+The priority order is:
+
+1. Safety and security.
+2. Operational reliability.
+3. Guest experience.
+4. Staff efficiency.
+5. Ease of implementation.
+6. Affordability.
+7. Scalability.
+8. Advanced features.
+
+Never sacrifice the first three priorities simply to introduce more functionality.
+
+**Ren by TeamAIN**
+
+*Big-brand technology. Independent hotel simplicity.*
+
+Build a platform that makes hospitality more human by making its technology more intelligent.

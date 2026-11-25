@@ -1,0 +1,301 @@
+{
+  "entities": {
+    "Hotel": {
+      "title": "Hotel",
+      "description": "Configuration, locations, and profile for a hotel property.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique hotel identifier matching owner UID or sandbox ID.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the hotel.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "persona": {
+          "type": "string",
+          "description": "Concierge AI persona and custom prompt instructions.",
+          "maxLength": 4000
+        },
+        "faqs": {
+          "type": "array",
+          "description": "Frequently asked questions for the hotel."
+        },
+        "slas": {
+          "type": "object",
+          "description": "Service level agreement response targets in minutes."
+        },
+        "locations": {
+          "type": "array",
+          "description": "Configured rooms and physical QR locations for the property."
+        },
+        "emergencyPhone": {
+          "type": "string",
+          "description": "Front desk or property emergency contact phone number.",
+          "maxLength": 50
+        }
+      },
+      "required": ["name", "persona", "faqs", "slas"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "A guest messaging conversation session for a hotel.",
+      "type": "object",
+      "properties": {
+        "guestUid": {
+          "type": "string",
+          "description": "Anonymous or authenticated Firebase UID of the guest.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "roomNumber": {
+          "type": "string",
+          "description": "Optional guest room number or short location code.",
+          "maxLength": 50
+        },
+        "locationId": {
+          "type": "string",
+          "description": "Opaque configured location identifier from QR or selector.",
+          "maxLength": 128
+        },
+        "locationLabel": {
+          "type": "string",
+          "description": "Human-readable location label such as Room 412 or Pool Deck.",
+          "maxLength": 100
+        },
+        "locationType": {
+          "type": "string",
+          "description": "Location category type (room, suite, lobby, pool, restaurant, etc.).",
+          "maxLength": 50
+        },
+        "lastUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last activity in the session."
+        },
+        "previewText": {
+          "type": "string",
+          "description": "Short preview of the latest message.",
+          "maxLength": 5000
+        },
+        "previewStaffText": {
+          "type": "string",
+          "description": "English preview of the latest message for staff inbox.",
+          "maxLength": 5000
+        },
+        "isUnread": {
+          "type": "boolean",
+          "description": "Whether staff has unread guest activity."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "awaiting_human", "staff_controlled", "escalated", "completed"],
+          "description": "Current conversation state including human takeover."
+        },
+        "guestLanguage": {
+          "type": "string",
+          "description": "Optional ISO language code for the guest.",
+          "maxLength": 20
+        },
+        "assignedStaffUid": {
+          "type": "string",
+          "description": "UID of the staff associate managing the conversation.",
+          "maxLength": 128
+        },
+        "assignedStaffEmail": {
+          "type": "string",
+          "description": "Email of the assigned staff associate.",
+          "maxLength": 200
+        },
+        "escalationReason": {
+          "type": "string",
+          "description": "Reason the conversation was escalated.",
+          "maxLength": 500
+        },
+        "escalationSeverity": {
+          "type": "string",
+          "enum": ["high", "critical"],
+          "description": "Escalation severity level."
+        }
+      },
+      "required": ["guestUid", "lastUpdatedAt", "previewText", "isUnread", "status"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Individual message within a guest chat session.",
+      "type": "object",
+      "properties": {
+        "sender": {
+          "type": "string",
+          "enum": ["guest", "ai", "staff", "system"],
+          "description": "Originator of the message."
+        },
+        "text": {
+          "type": "string",
+          "description": "Original message body as authored by sender.",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "staffText": {
+          "type": "string",
+          "description": "English translation of message for hotel staff.",
+          "maxLength": 5000
+        },
+        "guestText": {
+          "type": "string",
+          "description": "Translated message in the guest's native language.",
+          "maxLength": 5000
+        },
+        "originalLanguage": {
+          "type": "string",
+          "description": "ISO 639-1 code of the original message language.",
+          "maxLength": 20
+        },
+        "translatedToLanguage": {
+          "type": "string",
+          "description": "ISO 639-1 code of the target translated language.",
+          "maxLength": 20
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when message was sent."
+        },
+        "guestUid": {
+          "type": "string",
+          "description": "Guest UID associated with the session.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "staffUid": {
+          "type": "string",
+          "description": "Optional staff UID if sent by an associate.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        }
+      },
+      "required": ["sender", "text", "timestamp"]
+    },
+    "ServiceRequest": {
+      "title": "ServiceRequest",
+      "description": "Guest service request ticket created from chat or structured workflows.",
+      "type": "object",
+      "properties": {
+        "referenceCode": {
+          "type": "string",
+          "description": "Human-friendly tracking reference such as R-4821.",
+          "maxLength": 30
+        },
+        "sessionId": {
+          "type": "string",
+          "description": "Associated session ID.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "item": {
+          "type": "string",
+          "description": "Requested item or service title.",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "quantity": {
+          "type": "integer",
+          "description": "Requested quantity when applicable."
+        },
+        "category": {
+          "type": "string",
+          "description": "Request category.",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "department": {
+          "type": "string",
+          "description": "Routed hotel department.",
+          "maxLength": 100
+        },
+        "roomNumber": {
+          "type": "string",
+          "description": "Guest room number or location.",
+          "maxLength": 50
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "acknowledged", "in_progress", "completed", "escalated", "reopened", "cancelled"],
+          "description": "Ticket lifecycle status."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when ticket was created."
+        },
+        "lastUpdated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when ticket was last updated."
+        },
+        "acknowledgedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when staff acknowledged the request."
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when staff completed the request."
+        },
+        "description": {
+          "type": "string",
+          "description": "Specific request details.",
+          "maxLength": 1000
+        },
+        "originalMessage": {
+          "type": "string",
+          "description": "Original guest message text.",
+          "maxLength": 1000
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["normal", "high", "urgent"],
+          "description": "Request priority level."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["ai", "structured", "staff"],
+          "description": "How the request was originated."
+        },
+        "guestUid": {
+          "type": "string",
+          "description": "Firebase UID of the guest who initiated the request.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        }
+      },
+      "required": ["sessionId", "item", "category", "roomNumber", "status", "createdAt", "lastUpdated"]
+    }
+  },
+  "firestore": {
+    "/hotels/{hotelId}": {
+      "schema": { "$ref": "#/entities/Hotel" },
+      "description": "Hotel configuration, locations, and concierge settings."
+    },
+    "/hotels/{hotelId}/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/Session" },
+      "description": "Guest messaging sessions belonging to a hotel."
+    },
+    "/hotels/{hotelId}/sessions/{sessionId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/Message" },
+      "description": "Chat messages within a specific guest session."
+    },
+    "/hotels/{hotelId}/requests/{requestId}": {
+      "schema": { "$ref": "#/entities/ServiceRequest" },
+      "description": "Service requests generated for hotel staff."
+    }
+  }
+}

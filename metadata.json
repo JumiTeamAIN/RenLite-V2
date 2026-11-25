@@ -1,0 +1,6 @@
+{
+  "name": "RenLite v2",
+  "description": "AI-powered hotel guest messaging system with staff dashboard and Gemini integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
