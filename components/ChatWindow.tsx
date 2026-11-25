@@ -10,6 +10,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { auth, db, signInGuest, OperationType, handleFirestoreError } from '../services/firebase';
 import { sendMessageToAI, translateMessageToEnglish } from '../services/clientAi';
@@ -71,12 +72,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const [expandedOriginals, setExpandedOriginals] = useState<Record<string, boolean>>({});
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+  const [isSending, setIsSending] = useState(false);
 
   // Watchdog: If thinking for > 48s, stop spinner.
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     if (isThinking) {
-      timer = setTimeout(() => setIsThinking(false), 48000);
+      timer = setTimeout(() => {
+        setIsThinking(false);
+        setChatError('This is taking longer than expected. Your message may still be processing. Please avoid sending it again; contact the front desk directly if urgent.');
+      }, 48000);
     }
     return () => clearTimeout(timer);
   }, [isThinking]);
@@ -135,7 +141,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       const initialType = (matchedLoc?.type || (locationCode ? 'other' : '')).slice(0, 50);
 
       // Check local storage first (Persist session across refresh)
-      const storedSession = localStorage.getItem(`ren_session_${hotelId}`);
+      let storedSession: string | null = null;
+      try { storedSession = localStorage.getItem(`ren_session_${hotelId}`); } catch { /* Storage may be blocked on mobile. */ }
       if (storedSession) {
         try {
           const existingSnap = await getDoc(doc(db, 'hotels', hotelId, 'sessions', storedSession));
@@ -143,14 +150,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
             if (!cancelled) setSessionId(storedSession);
             return;
           }
-        } catch {
-          // Stale or inaccessible session from another account/project — create a fresh one
+        } catch (err: any) {
+          if (err?.code !== 'permission-denied' && err?.code !== 'not-found') {
+            if (!cancelled) setInitError('Unable to reconnect to your existing conversation. Please refresh when your connection is restored.');
+            return;
+          }
         }
-        localStorage.removeItem(`ren_session_${hotelId}`);
+        try { localStorage.removeItem(`ren_session_${hotelId}`); } catch { /* Storage unavailable. */ }
       }
 
       const sessionsPath = `hotels/${hotelId}/sessions`;
       try {
+        if (cancelled) return;
         const sessionRef = await addDoc(collection(db, sessionsPath), {
           guestUid: user.uid,
           lastUpdatedAt: serverTimestamp(),
@@ -163,7 +174,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           ...(initialType ? { locationType: initialType } : {}),
         });
 
-        localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id);
+        try { localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id); } catch { /* Storage unavailable. */ }
         if (!cancelled) setSessionId(sessionRef.id);
       } catch (err) {
         if (!cancelled) {
@@ -173,7 +184,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       }
     };
 
-    initSession();
+    void initSession().catch((err) => {
+      console.error('Guest initialization failed:', err);
+      if (!cancelled) setInitError('Unable to connect. Please refresh and try again.');
+    });
     return () => {
       cancelled = true;
     };
@@ -241,7 +255,6 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        setChatError(null);
         const fallbackNow = Date.now();
         const msgs = snapshot.docs
           .map((d) => ({ id: d.id, ...d.data() } as Message))
@@ -254,7 +267,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         if (msgs.length > 0) {
           setPendingGuestMessages((prev) =>
             prev.filter(
-              (pending) => !msgs.some((m) => m.sender === 'guest' && m.text === pending.text)
+              (pending) => !msgs.some((m) => m.sender === 'guest' && m.id === pending.localId)
             )
           );
           const lastMsg = msgs[msgs.length - 1];
@@ -305,10 +318,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   }, [messages, isThinking, activeView]);
 
   const sendGuestMessage = async (rawText: string) => {
-    if (!rawText.trim() || !sessionId || !guestUid || isThinking) return;
+    if (!rawText.trim() || !sessionId || !guestUid || !session || sendingRef.current) return;
+    sendingRef.current = true;
+    setIsSending(true);
 
     const text = rawText.trim().slice(0, 5000);
-    const localId = `pending-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const msgRef = doc(collection(db, `hotels/${hotelId}/sessions/${sessionId}/messages`));
+    const localId = msgRef.id;
     setInputText('');
     setChatError(null);
     setPendingGuestMessages((prev) => [...prev, { localId, text }]);
@@ -319,24 +335,25 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       setIsThinking(true);
     }
 
-    const msgsPath = `hotels/${hotelId}/sessions/${sessionId}/messages`;
     const sessionPath = `hotels/${hotelId}/sessions/${sessionId}`;
 
     try {
-      const msgRef = await addDoc(collection(db, msgsPath), {
+      const batch = writeBatch(db);
+      batch.set(msgRef, {
         sender: 'guest',
         guestUid,
         text,
         timestamp: serverTimestamp(),
       });
 
-      await updateDoc(doc(db, sessionPath), {
+      batch.update(doc(db, sessionPath), {
         lastUpdatedAt: serverTimestamp(),
         previewText: text,
         isUnread: true,
         ...(wasCompleted ? { status: 'active' } : {}),
       });
 
+      await batch.commit();
       setPendingGuestMessages((prev) => prev.filter((p) => p.localId !== localId));
 
       if (!isStaffControlled) {
@@ -367,6 +384,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         'Your message could not be sent right now. Please check your connection and try again.'
       );
     } finally {
+      sendingRef.current = false;
+      setIsSending(false);
       setIsThinking(false);
     }
   };
@@ -397,7 +416,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         ...(initialLabel ? { locationLabel: initialLabel } : {}),
         ...(initialType ? { locationType: initialType } : {}),
       });
-      localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id);
+      try { localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id); } catch { /* Storage unavailable. */ }
       setMessages([]);
       setSessionId(sessionRef.id);
       setActiveView('chat');
@@ -636,6 +655,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
               </button>
               <span aria-hidden="true">·</span>
               <span className="whitespace-nowrap">{statusText}</span>
+              <span className="font-mono shrink-0" title={sessionId || undefined}>#{sessionId.slice(0, 8)}</span>
             </div>
           </div>
 
@@ -739,7 +759,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                     <button
                       key={prompt}
                       type="button"
-                      disabled={isThinking}
+                      disabled={isSending || !session}
                       onClick={() => sendGuestMessage(prompt)}
                       className="min-h-[36px] text-left text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 disabled:opacity-50 text-slate-700 transition-colors"
                     >
@@ -877,7 +897,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={!inputText.trim() || isThinking}
+                disabled={!inputText.trim() || isSending || !session}
                 aria-label="Send message"
                 className="min-w-[44px] min-h-[44px] bg-indigo-600 rounded-xl flex items-center justify-center text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
               >
