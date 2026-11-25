@@ -367,6 +367,8 @@ async function startServer() {
       transcript
     );
     const areaHint = extractAreaHint(persona, safeFaqs);
+    // Diagnostic metadata contains no guest messages, credentials, or conversation identifiers.
+    const searchDiagnostics = { intentDetected: requiresLocalGrounding, area: areaHint, attempts: [] as { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[] };
 
     try {
       const { defaultClient, betaClient } = getAiClients();
@@ -465,6 +467,7 @@ STRICT RULES:
                 const metadata = searchRes.candidates?.[0]?.groundingMetadata;
                 const sourceCount = (metadata?.groundingChunks || []).filter(chunk => Boolean(chunk.web?.uri)).length;
                 const supported = (metadata?.groundingSupports || []).some(support => Boolean(support.groundingChunkIndices?.length));
+                searchDiagnostics.attempts.push({ model: candidate.model, sourceCount, elapsedMs: Date.now() - started, outcome: groundedText && sourceCount && supported ? 'grounded' : 'no_grounded_answer' });
                 console.info('[concierge-search] attempt', { model: candidate.model, sourceCount, supported, elapsedMs: Date.now() - started, outcome: groundedText && sourceCount && supported ? 'grounded' : 'no_grounded_answer' });
                 if (!groundedText || !sourceCount || !supported) break;
                 if (groundedText) {
@@ -479,6 +482,7 @@ STRICT RULES:
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 const errStatus = getHttpStatusFromError(err);
+                searchDiagnostics.attempts.push({ model: candidate.model, status: errStatus, elapsedMs: Date.now() - started, outcome: 'failed' });
                 console.warn('[concierge-search] attempt failed', { model: candidate.model, status: errStatus, elapsedMs: Date.now() - started });
                 if (isKeyOrAuthError(errMsg)) break;
                 if (isTransientModelError(err) || errStatus === 404) {
@@ -504,6 +508,7 @@ STRICT RULES:
 
       if (directGroundedReply) {
         res.json({
+          searchDiagnostics,
           text: directGroundedReply,
           guestLanguage: '',
           roomNumber: knownRoomNumber || '',
@@ -520,7 +525,7 @@ STRICT RULES:
 
       if (requiresLocalGrounding && !mightContainServiceOrHandoff && !assumeNonEnglish && !verifiedLocalFindings && areaHint && !safeFaqs.some(f => needsLocalSearchGrounding(f.question, ''))) {
         const mapsUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(`${latestMsgText.slice(0, 200)} near ${areaHint}`);
-        res.json({ text: `I couldn't verify individual recommendations right now. You can explore nearby options here: ${mapsUrl}\nPlease confirm hours and offers directly with the business. Our front desk can also help.`, guestLanguage: 'en', roomNumber: knownRoomNumber || '', humanHandoffRequested: false, escalation: { triggered: false, severity: 'none', reason: '' }, requests: [] });
+        res.json({ searchDiagnostics, text: `I couldn't verify individual recommendations right now. You can explore nearby options here: ${mapsUrl}\nPlease confirm hours and offers directly with the business. Our front desk can also help.`, guestLanguage: 'en', roomNumber: knownRoomNumber || '', humanHandoffRequested: false, escalation: { triggered: false, severity: 'none', reason: '' }, requests: [] });
         return;
       }
 
@@ -854,6 +859,7 @@ ACTION & EXTRACTION RULES:
         String(parsed.humanHandoffRequested).toLowerCase() === 'true';
 
       res.json({
+        searchDiagnostics,
         text,
         replyEnglish,
         latestGuestEnglish,
@@ -880,7 +886,7 @@ ACTION & EXTRACTION RULES:
         : status === 429
           ? 'Rate limit reached. Please try again in a moment.'
           : rawMessage;
-      res.status(status).json({ error: clientMessage });
+      res.status(status).json({ error: clientMessage, searchDiagnostics });
     }
   });
 
