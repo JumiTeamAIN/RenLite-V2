@@ -814,7 +814,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                         {isStaff ? 'Hotel Associate' : 'Ren Concierge'}
                       </div>
                     )}
-                    <div>{displayMsgText}</div>
+                    <div>{displayMsgText.split(/(https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=[^\s<]+)/g).map((part, i) => part.startsWith('https://www.google.com/maps/search/?api=1&query=') && !isGuest ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline font-medium break-all">Explore nearby options on Google Maps</a> : <React.Fragment key={i}>{part}</React.Fragment>)}</div>
                     {hasGuestTranslation && (
                       <div className="mt-1.5 pt-1.5 border-t border-white/15 text-[11px] text-indigo-200 flex items-center justify-between gap-2">
                         <span>Translated from English</span>
