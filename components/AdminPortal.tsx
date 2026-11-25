@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  writeBatch,
   addDoc,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -410,7 +411,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   ]);
 
   const handleStaffReply = async () => {
-    if (!selectedSessionId || !replyText.trim() || !auth.currentUser || sendingStaffReply) return;
+    if (!selectedSessionId || !selectedSession?.guestUid || !replyText.trim() || !auth.currentUser || sendingStaffReply) return;
     const path = `hotels/${hotelId}/sessions/${selectedSessionId}/messages`;
     const sessionPath = `hotels/${hotelId}/sessions/${selectedSessionId}`;
     const trimmed = replyText.trim().slice(0, 5000);
@@ -439,9 +440,10 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         shouldTranslateStaffReply && guestTranslated && guestTranslated !== trimmed
       );
 
-      await addDoc(collection(db, path), {
+      const batch = writeBatch(db);
+      batch.set(doc(collection(db, path)), {
         sender: 'staff',
-        ...(selectedSession?.guestUid ? { guestUid: selectedSession.guestUid } : {}),
+        guestUid: selectedSession.guestUid,
         staffUid: auth.currentUser.uid,
         text: trimmed,
         ...(hasGuestTranslation
@@ -455,7 +457,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       });
 
       // Automatically switch to staff_controlled when an associate replies
-      await updateDoc(doc(db, sessionPath), {
+      batch.update(doc(db, sessionPath), {
         lastUpdatedAt: serverTimestamp(),
         previewText: hasGuestTranslation ? guestTranslated : trimmed,
         previewStaffText: trimmed,
@@ -468,9 +470,11 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
           : {}),
       });
 
+      await batch.commit();
       setReplyText('');
     } catch (err) {
-      handleFirestoreError(err, OperationType.CREATE, path);
+      console.error('Staff reply failed:', err);
+      setStaffReplyError('Reply could not be confirmed. Check your connection and conversation before retrying.');
     } finally {
       setSendingStaffReply(false);
     }
@@ -933,6 +937,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                           >
                             {statusLabel}
                           </span>
+                          <span className="font-mono" title={s.id}>#{s.id.slice(0, 8)}</span>
                           {s.guestLanguage && (
                             <>
                               <span aria-hidden="true">·</span>
@@ -983,6 +988,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                         </span>
                       </div>
                       <div className="text-xs text-slate-500 mt-0.5">
+                        <span className="font-mono" title={selectedSession.id}>#{selectedSession.id.slice(0, 8)} · </span>
                         {selectedSessionRequests.length} linked request
                         {selectedSessionRequests.length === 1 ? '' : 's'}
                         {selectedSession.assignedStaffEmail
