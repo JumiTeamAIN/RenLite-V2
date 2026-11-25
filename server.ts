@@ -377,6 +377,12 @@ async function startServer() {
         retries: number;
       };
 
+      const conciergeDeadline = Date.now() + 32000;
+      const remainingSignal = (maxMs: number) => {
+        const remaining = conciergeDeadline - Date.now();
+        if (remaining <= 0) throw new Error('Concierge model time budget exhausted');
+        return AbortSignal.timeout(Math.min(maxMs, remaining));
+      };
       const allCandidates: ModelCandidate[] = [
         { model: 'gemini-4-hydrogen', client: defaultClient, retries: 2 },
         { model: 'gemini-3.1-flash-lite', client: defaultClient, retries: 1 },
@@ -440,7 +446,7 @@ STRICT RULES:
                   config: {
                     tools: [{ googleSearch: {} }],
                     ...getThinkingConfigForModel(candidate.model),
-                    abortSignal: AbortSignal.timeout(15_000),
+                    abortSignal: remainingSignal(15_000),
                   },
                 });
                 modelCooldownUntil.delete(candidate.model);
@@ -629,7 +635,7 @@ ACTION & EXTRACTION RULES:
                 responseMimeType: 'application/json',
                 responseSchema,
                 ...getThinkingConfigForModel(candidate.model),
-                abortSignal: AbortSignal.timeout(12_000),
+                abortSignal: remainingSignal(12_000),
               },
             });
             modelCooldownUntil.delete(candidate.model);
@@ -656,7 +662,7 @@ ACTION & EXTRACTION RULES:
                   config: {
                     systemInstruction,
                     ...getThinkingConfigForModel(candidate.model),
-                    abortSignal: AbortSignal.timeout(12_000),
+                    abortSignal: remainingSignal(12_000),
                   },
                 });
                 break;
