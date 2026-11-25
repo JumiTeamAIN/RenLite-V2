@@ -597,11 +597,18 @@ export const sendMessageToAI = async (
         : 'Ren AI is temporarily unavailable, but your message was saved for our hotel team. You can use Quick Request above or tap Speak with Staff for immediate help.';
 
     try {
-      await addDoc(collection(db, msgsPath), {
-        sender: 'ai',
-        ...(guestUid ? { guestUid } : {}),
-        text: fallbackMsg.slice(0, 5000),
-        timestamp: serverTimestamp(),
+      const sessionRef = doc(db, sessionPath);
+      const replyRef = latestGuestMessageId ? doc(collection(db, msgsPath), `ai-${latestGuestMessageId}`) : doc(collection(db, msgsPath));
+      await runTransaction(db, async (tx) => {
+        const current = await tx.get(sessionRef);
+        const reply = await tx.get(replyRef);
+        if (!current.exists() || reply.exists() || ['staff_controlled', 'completed'].includes(current.data().status)) return;
+        tx.set(replyRef, {
+          sender: 'ai',
+          ...(guestUid ? { guestUid } : {}),
+          text: fallbackMsg.slice(0, 5000),
+          timestamp: serverTimestamp(),
+        });
       });
     } catch (writeErr) {
       handleFirestoreError(writeErr, OperationType.CREATE, msgsPath);
