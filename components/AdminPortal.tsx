@@ -182,6 +182,27 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     front_desk: 5,
   });
   const [savingConfig, setSavingConfig] = useState(false);
+  const [searchTest, setSearchTest] = useState('What are some dining options for a couple? We’re looking for happy hour.');
+  const [searchTesting, setSearchTesting] = useState(false);
+  const [searchReport, setSearchReport] = useState<{ intentDetected?: boolean; area?: string; attempts?: { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[]; text?: string; error?: string } | null>(null);
+  const runSearchTest = async () => {
+    if (searchTesting || !searchTest.trim() || !hotelConfig || !auth.currentUser) return;
+    setSearchTesting(true);
+    setSearchReport(null);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const token = await auth.currentUser.getIdToken();
+      const response = await fetch('/api/gemini/concierge', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, signal: controller.signal, body: JSON.stringify({ hotelName: hotelConfig.name, persona: hotelConfig.persona, faqs: hotelConfig.faqs || [], latestGuestMessage: searchTest.trim(), transcript: `Guest: ${searchTest.trim()}` }) });
+      const data = await response.json();
+      setSearchReport({ ...data.searchDiagnostics, text: data.text, error: response.ok ? undefined : (data.error || `HTTP ${response.status}`) });
+    } catch (err) {
+      setSearchReport({ error: err instanceof Error ? err.message : 'Search test failed' });
+    } finally {
+      clearTimeout(timer);
+      setSearchTesting(false);
+    }
+  };
   const [configFeedback, setConfigFeedback] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -1600,6 +1621,19 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                 Customize how Ren responds to guests, local area recommendations, and hotel FAQs.
               </p>
 
+              <section className="bg-white p-6 rounded-xl border border-slate-200 space-y-3 mb-6">
+                <h3 className="font-semibold text-sm">Google Search Diagnostics</h3>
+                <p className="text-xs text-slate-500">Tests the same concierge API with the saved hotel configuration. Consumes runtime AI quota but does not create a guest conversation or service request.</p>
+                <input aria-label="Search test query" maxLength={500} value={searchTest} onChange={e => setSearchTest(e.target.value)} className="w-full border rounded-lg px-3 py-2 text-sm" />
+                <button type="button" disabled={searchTesting || !hotelConfig || !searchTest.trim()} onClick={runSearchTest} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm disabled:opacity-50">{searchTesting ? 'Testing search…' : 'Test Google Search'}</button>
+                {searchReport && <div className="bg-slate-50 p-3 rounded-lg text-xs space-y-2" role="status">
+                  <p>Local intent: {searchReport.intentDetected === undefined ? 'Unknown' : searchReport.intentDetected ? 'Detected' : 'Not detected'}</p>
+                  <p>Property area: {searchReport.area || 'Not detected'}</p>
+                  {searchReport.attempts?.map((attempt, i) => <div key={i} className="border-t pt-2"><strong>{attempt.model}</strong> — {attempt.outcome} · {attempt.elapsedMs} ms · {attempt.sourceCount ?? 0} sources{attempt.status ? ' · HTTP ' + attempt.status : ''}</div>)}
+                  {searchReport.error && <p className="text-red-700">{searchReport.error}</p>}
+                  {searchReport.text && <p className="whitespace-pre-wrap break-words">{searchReport.text}</p>}
+                </div>}
+              </section>
               <form onSubmit={handleSaveConfig} className="space-y-6">
                 <div className="bg-white p-6 rounded-xl border border-slate-200 space-y-5">
                   <div className="grid sm:grid-cols-2 gap-4">

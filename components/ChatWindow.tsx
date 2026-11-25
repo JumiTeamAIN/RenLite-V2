@@ -241,6 +241,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       },
       (error) => {
         console.error(`Session listener error (${sessionPath}):`, error);
+        setChatError('Conversation updates were interrupted. Please refresh to reconnect.');
       }
     );
   }, [sessionId, guestUid, hotelId]);
@@ -337,6 +338,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
 
     const sessionPath = `hotels/${hotelId}/sessions/${sessionId}`;
 
+    let messageSaved = false;
     try {
       const batch = writeBatch(db);
       batch.set(msgRef, {
@@ -349,11 +351,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       batch.update(doc(db, sessionPath), {
         lastUpdatedAt: serverTimestamp(),
         previewText: text,
+        previewStaffText: text,
         isUnread: true,
         ...(wasCompleted ? { status: 'active' } : {}),
       });
 
       await batch.commit();
+      messageSaved = true;
       setPendingGuestMessages((prev) => prev.filter((p) => p.localId !== localId));
 
       if (!isStaffControlled) {
@@ -380,8 +384,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     } catch (e) {
       console.error('Failed to send guest message:', e);
       setPendingGuestMessages((prev) => prev.filter((p) => p.localId !== localId));
+      if (!messageSaved) setInputText(text);
       setChatError(
-        'Your message could not be sent right now. Please check your connection and try again.'
+        messageSaved
+          ? 'Your message was saved, but Ren could not finish responding. Please use Speak with Staff or contact the front desk if urgent.'
+          : 'Your message could not be confirmed. Check your connection and conversation before trying again.'
       );
     } finally {
       sendingRef.current = false;
@@ -807,7 +814,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                         {isStaff ? 'Hotel Associate' : 'Ren Concierge'}
                       </div>
                     )}
-                    <div>{displayMsgText}</div>
+                    <div>{displayMsgText.split(/(https:\/\/www\.google\.com\/maps\/search\/\?api=1&query=[^\s<]+)/g).map((part, i) => part.startsWith('https://www.google.com/maps/search/?api=1&query=') && !isGuest ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline font-medium break-all">Explore nearby options on Google Maps</a> : <React.Fragment key={i}>{part}</React.Fragment>)}</div>
                     {hasGuestTranslation && (
                       <div className="mt-1.5 pt-1.5 border-t border-white/15 text-[11px] text-indigo-200 flex items-center justify-between gap-2">
                         <span>Translated from English</span>

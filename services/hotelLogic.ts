@@ -119,7 +119,7 @@ export function detectDeterministicSafetySignal(text: string): DeterministicSafe
 }
 
 const LOCAL_INFO_REGEX =
-  /\b(things to do|what to do|what'?s there to do|around here|in the area|nearby|near here|local|recommend(ation|ations)?|suggest(ion|ions)?|dining|restaurant(s)?|where to eat|food|dinner|lunch|brunch|cafe|coffee shop|bakery|pizza|burger(s)?|taco(s)?|sushi|bar(s)?|pub|brewery|ice cream|attraction(s)?|activit(y|ies)|entertainment|kids|teens|family|park(s)?|beach(es)?|museum(s)?|arcade|movie(s)?|cinema|theater|mall|shopping|nightlife|golf|zoo|aquarium|pharmacy|grocery|supermarket|urgent care|weather|forecast|airport|shuttle|directions|qu[ée] hacer|cerca|restaurante(s)?|comer|cenar|lugares|actividades|recomendar|atracciones)\b/i;
+  /\b(things to do|what to do|what'?s there to do|around here|in the area|nearby|near here|local|recommend(ation|ations)?|suggest(ion|ions)?|happy hours?|date night|cocktails?|steakhouse(s)?|seafood|romantic|places to eat|eat out|cafés?|dining|restaurant(s)?|where to eat|food|dinner|lunch|brunch|cafe|coffee shop|bakery|pizza|burger(s)?|taco(s)?|sushi|bar(s)?|pub|brewery|ice cream|attraction(s)?|activit(y|ies)|entertainment|kids|teens|family|park(s)?|beach(es)?|museum(s)?|arcade|movie(s)?|cinema|theater|mall|shopping|nightlife|golf|zoo|aquarium|pharmacy|grocery|supermarket|urgent care|weather|forecast|airport|shuttle|directions|qu[ée] hacer|cerca|restaurante(s)?|comer|cenar|lugares|actividades|recomendar|atracciones|hora feliz|copas|bares|restaurantes|recomendaciones|sortir|restaurants?|où manger|bonnes adresses|heure de l.apéritif|onde comer|passeios|recomendações)\b/i;
 
 const FOLLOWUP_LOCAL_REGEX =
   /\b(what about|how about|any other|more options|something else|anything else|and for|y para|qu[ée] tal|otros|otras)\b/i;
@@ -127,7 +127,7 @@ const FOLLOWUP_LOCAL_REGEX =
 export function needsLocalSearchGrounding(latestGuestMessage: string, transcript: string): boolean {
   const latest = (latestGuestMessage || '').trim();
   if (!latest) return false;
-  if (LOCAL_INFO_REGEX.test(latest)) return true;
+  if (LOCAL_INFO_REGEX.test(latest) || /餐厅|附近|推荐|レストラン|おすすめ|近く|맛집|근처|추천|مطاعم|بالقرب|おすすめ/.test(latest)) return true;
 
   if (FOLLOWUP_LOCAL_REGEX.test(latest)) {
     const recentLines = transcript.split('\n').slice(-6).join('\n');
