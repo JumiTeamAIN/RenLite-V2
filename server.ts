@@ -485,6 +485,45 @@ async function startServer() {
     }catch{res.status(500).json({error:'Unable to confirm staff action.'});}
   });
 
+  // Reserve at most one optional conversation survey per session per rolling 24 hours.
+  app.post('/api/insights/feedback-offer',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    let uid:string;
+    try{const header=req.headers.authorization||'';if(!header.startsWith('Bearer '))throw new Error();uid=(await adminAuth.verifyIdToken(header.slice(7))).uid;}
+    catch{res.status(401).json({error:'Authentication required.'});return;}
+    const {hotelId,sessionId,guestMessageId}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)){res.status(400).json({error:'Invalid feedback offer.'});return;}
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId);
+      const event=hotel.collection('assistanceEvents').doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex'));
+      const offer=hotel.collection('feedbackOffers').doc(sessionId);
+      const closing=(v:unknown)=>typeof v==='string'&&/^(?:thanks(?: so much| for your help)?|thank you(?: so much| for your help)?|no[, ]+thank you|no[, ]+that['’]s all(?:[, ]+thank you)?|that['’]s all(?:[, ]+thanks)?|all set|gracias(?: por tu ayuda)?|merci(?: beaucoup)?)[.!\s]*$/iu.test(v.trim());
+      const result=await db.runTransaction(async tx=>{
+        const [s,e,guest,reply,prior,requests,history]=await Promise.all([
+          tx.get(session),tx.get(event),tx.get(session.collection('messages').doc(guestMessageId)),
+          tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(offer),
+          tx.get(hotel.collection('requests').where('sessionId','==',sessionId)),
+          tx.get(session.collection('messages').orderBy('timestamp','desc').limit(30))
+        ]);
+        if(!s.exists||s.data()?.guestUid!==uid||s.data()?.status!=='active'||!e.exists||e.data()?.kind!=='reply_generated'||guest.data()?.sender!=='guest'||guest.data()?.guestUid!==uid||!closing(guest.data()?.text)||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid)return false;
+        if(history.docs[0]?.id!=='ai-'+guestMessageId||requests.docs.some(d=>!['completed','cancelled'].includes(d.data().status)))return false;
+        if(history.docs.some(d=>d.data().sender==='staff'||/\b(emergency|fire|suicid|assault|harass|injur|unsafe|complaint|stolen|medical|police|blood|choking|allergic)\w*\b/i.test(String(d.data().text||''))))return false;
+        const earlier=history.docs.filter(d=>d.data().sender==='guest'&&d.id!==guestMessageId&&!closing(d.data().text)&&String(d.data().text||'').trim().length>=8&&!/^(?:hello|hi|hey|good morning|good evening|good afternoon)[!.\s]*$/i.test(String(d.data().text||'').trim()));
+        let assisted=false;
+        for(const previous of earlier){
+          const old=await tx.get(hotel.collection('assistanceEvents').doc(createHash('sha256').update(sessionId+'|'+previous.id).digest('hex')));
+          if(old.exists&&['grounded_recommendation','configured_faq_match','reply_generated','request_suggested'].includes(old.data()?.kind)&&history.docs.some(d=>d.id==='ai-'+previous.id&&d.data().sender==='ai')){assisted=true;break;}
+        }
+        if(!assisted)return false;
+        if(prior.exists&&Date.now()-(prior.data()?.createdAt?.toMillis()||0)<86400000)return false;
+        tx.set(offer,{guestMessageId,createdAt:FieldValue.serverTimestamp(),version:1});
+        return true;
+      });
+      if(!result){res.status(409).json({error:'No feedback prompt available.'});return;}
+      res.json({ok:true});
+    }catch{res.status(500).json({error:'Feedback unavailable.'});}
+  });
+
   // Feedback is one immutable vote per guest-owned, backend-recorded turn.
   app.post('/api/insights/feedback', async (req,res) => {
     res.set('Cache-Control','no-store');
@@ -501,10 +540,11 @@ async function startServer() {
       const event=hotel.collection('assistanceEvents').doc(id);
       const feedback=hotel.collection('assistanceFeedback').doc(id);
       const result=await teamDb().runTransaction(async tx=>{
-        const [s,e,reply,f]=await Promise.all([tx.get(session),tx.get(event),tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(feedback)]);
+        const [s,e,reply,f,offer]=await Promise.all([tx.get(session),tx.get(event),tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(feedback),tx.get(hotel.collection('feedbackOffers').doc(sessionId))]);
         if(!s.exists||s.data()?.guestUid!==uid||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested','configured_faq_match'].includes(e.data()?.kind))return 'denied';
         if(f.exists)return 'duplicate';
-        tx.create(feedback,{rating,createdAt:FieldValue.serverTimestamp(),version:1});
+        if(!offer.exists||offer.data()?.guestMessageId!==guestMessageId||Date.now()-(offer.data()?.createdAt?.toMillis()||0)>=86400000)return 'denied';
+        tx.create(feedback,{rating,createdAt:FieldValue.serverTimestamp(),version:2,scope:'conversation'});
         return 'saved';
       });
       if(result==='denied'){res.status(403).json({error:'Feedback unavailable for this response.'});return;}
