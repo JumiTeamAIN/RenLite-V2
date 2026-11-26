@@ -61,3 +61,16 @@ test('model policy defaults to only tested model and never retries a cooling can
  assert.ok(courtesyReply('Thank you!'));
  assert.equal(courtesyReply('Thanks, but I need a towel'),null);
 });
+
+import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from '../services/aiBudget.ts';
+test('attempt allowance rejects exhausted budgets and disabled search',()=>{
+ assert.equal(attemptDebit(DEFAULT_BUDGET,'concierge',474),1);
+ assert.equal(attemptDebit(DEFAULT_BUDGET,'concierge',475),null);
+ assert.equal(attemptDebit(DEFAULT_BUDGET,'probe-search',471),null);
+ assert.equal(attemptDebit({...DEFAULT_BUDGET,searchEnabled:false},'search',0),null);
+ assert.equal(attemptDebit({...DEFAULT_BUDGET,monthlyCents:0},'translate',0),null);
+ assert.equal(attemptDebit(DEFAULT_BUDGET,'search',NaN),null);
+ assert.equal(parseBudget({monthlyCents:501,searchEnabled:true}),null);
+ assert.equal(estimateTokenDollars({model:'unknown'}),null);
+ assert.ok(Math.abs(estimateTokenDollars({model:'gemini-3.5-flash-lite',inputTokens:1000000,outputTokens:1000000,thinkingTokens:1000000})!-5.3)<1e-9);
+});

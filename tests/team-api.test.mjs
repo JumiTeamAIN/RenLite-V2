@@ -43,6 +43,12 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
       return {status:r.status,data:await r.json()};
     }
     assert.equal((await policyCall(owner,'model-policy')).status,403);
+    assert.equal((await policyCall(owner,'ai-budget')).status,403);
+    assert.equal((await policyCall(owner,'ai-budget',{monthlyCents:0,searchEnabled:false})).status,403);
+    assert.equal((await policyCall(dev,'ai-budget',{monthlyCents:501,searchEnabled:true})).status,400);
+    assert.equal((await policyCall(dev,'ai-budget',{monthlyCents:0,searchEnabled:false})).status,200);
+    assert.equal((await policyCall(dev,'ai-budget')).data.policy.monthlyCents,0);
+    assert.equal((await policyCall(dev,'ai-budget',{monthlyCents:475,searchEnabled:true})).status,200);
     const initial=await policyCall(dev,'model-policy');
     assert.equal(initial.status,200);
     assert.equal(initial.data.policy.concierge,'gemini-2.5-flash');

@@ -1,3 +1,4 @@
+import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
 import { DEFAULT_MODEL_POLICY, parseModelPolicy, candidateModels, courtesyReply, validModel, MODEL_IDS, type ModelPolicy } from './services/modelPolicy.ts';
 import { directFaqAnswer } from './services/directFaq.ts';
@@ -344,10 +345,35 @@ async function startServer() {
     }catch(err){res.json({ok:false,model,operation,status:getHttpStatusFromError(err),elapsedMs:Date.now()-started});}
   });
 
+  const budgetRef=()=>teamDb().collection('platformSettings').doc('aiBudget');
+  const budgetMonth=()=>new Date().toISOString().slice(0,7);
+  const budgetLedger=(month:string)=>teamDb().collection('platformAiBudget').doc(month);
+  app.get('/api/developer/ai-budget',async(req,res)=>{
+    if(!await developer(req)){res.status(403).json({error:'Developer access required.'});return;}
+    try{const month=budgetMonth();const [p,l]=await Promise.all([budgetRef().get(),budgetLedger(month).get()]);res.json({policy:p.exists?parseBudget(p.data()):DEFAULT_BUDGET,month,usedCents:l.data()?.usedCents??0});}catch{res.status(503).json({error:'Budget unavailable.'});}
+  });
+  app.post('/api/developer/ai-budget',async(req,res)=>{
+    if(!await developer(req)){res.status(403).json({error:'Developer access required.'});return;}
+    const policy=parseBudget(req.body);if(!policy){res.status(400).json({error:'Invalid budget; maximum is $5.'});return;}
+    try{await budgetRef().set(policy);res.json({policy});}catch{res.status(503).json({error:'Budget unavailable.'});}
+  });
+  async function reserveAiAttempt(operation:string,month:string){
+    const db=teamDb();
+    await db.runTransaction(async tx=>{
+      const [p,l,m]=await Promise.all([tx.get(budgetRef()),tx.get(budgetLedger(month)),tx.get(modelPolicyRef())]);
+      const policy=p.exists?parseBudget(p.data()):DEFAULT_BUDGET;
+      const models=m.exists?parseModelPolicy(m.data()):DEFAULT_MODEL_POLICY;
+      const used=l.exists?l.data()?.usedCents:0;
+      const debit=policy?attemptDebit(policy,operation,used):null;
+      if(!models?.enabled||debit===null)throw Object.assign(new Error('AI allowance or feature unavailable. Please use Quick Request or Speak with Staff.'),{status:503,localBudget:true});
+      tx.set(budgetLedger(month),{usedCents:used+debit,attempts:FieldValue.increment(1),updatedAt:FieldValue.serverTimestamp()},{merge:true});
+    });
+  }
   // Aggregate usage only: never persist prompts, transcripts, tokens or guest identifiers.
   // Counts reflect this RenLite backend, not Google's invoice or other Project Omni apps.
   async function measuredAi<T extends {usageMetadata?: any; candidates?: any[]}>(model:string,operation:string,hotel:string,call:()=>Promise<T>):Promise<T>{
     const month=new Date().toISOString().slice(0,7);
+    await reserveAiAttempt(operation,month);
     const started=Date.now();
     let result:T|undefined;
     let errorStatus=0;
@@ -381,7 +407,7 @@ async function startServer() {
     if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)){res.status(400).json({error:'Invalid month.'});return;}
     try{
       const snap=await teamDb().collection('platformAiUsage').where('month','==',month).limit(2001).get();
-      res.json({month,rows:snap.docs.slice(0,2000).map(d=>d.data()),truncated:snap.size>2000});
+      res.json({month,rows:snap.docs.slice(0,2000).map(d=>({...d.data(),estimatedTokenDollars:estimateTokenDollars(d.data())})),truncated:snap.size>2000});
     }catch{res.status(503).json({error:'Usage unavailable.'});}
   });
 
@@ -918,7 +944,9 @@ async function startServer() {
         (Boolean(knownGuestLang) && !knownGuestLang.startsWith('en'));
 
       if (requiresLocalGrounding) {
-        const searchCandidates=policyCandidates(policy,'search',betaClient);
+        const budgetSnap=await budgetRef().get();
+        const budget=budgetSnap.exists?parseBudget(budgetSnap.data()):DEFAULT_BUDGET;
+        const searchCandidates=budget?.searchEnabled?policyCandidates(policy,'search',betaClient):[];
         const searchDeadline = Math.min(conciergeDeadline, Date.now() + (mightContainServiceOrHandoff || assumeNonEnglish ? 18000 : 28000));
         console.info('[concierge-search] intent detected', { areaConfigured: Boolean(areaHint), modelCount: searchCandidates.length });
         const searchTarget =
@@ -1203,7 +1231,7 @@ ACTION & EXTRACTION RULES:
                 await delay(errStatus === 429 ? 650 : 400 * attempt + Math.floor(Math.random() * 150));
                 continue;
               }
-              markModelCooldown(candidate.model, errStatus);
+              if (!(err as any)?.localBudget) markModelCooldown(candidate.model, errStatus);
               console.log(
                 `[concierge] ${candidate.model} unavailable (${errStatus}); failing over to next model.`
               );
@@ -1491,7 +1519,7 @@ ${text}`;
                 await delay(350 * attempt);
                 continue;
               }
-              markModelCooldown(candidate.model, errStatus);
+              if (!(err as any)?.localBudget) markModelCooldown(candidate.model, errStatus);
               break;
             }
             throw err;
@@ -1673,7 +1701,7 @@ ${JSON.stringify(safeItems)}`;
                 await delay(350 * attempt);
                 continue;
               }
-              markModelCooldown(candidate.model, errStatus);
+              if (!(err as any)?.localBudget) markModelCooldown(candidate.model, errStatus);
               break;
             }
             throw err;
