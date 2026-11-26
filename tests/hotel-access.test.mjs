@@ -1,7 +1,7 @@
 import { before, after, test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { doc, collection, getDoc, getDocs, setDoc, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, collection, getDoc, getDocs, setDoc, updateDoc, Timestamp, serverTimestamp, query, where } from 'firebase/firestore';
 let env;
 const config = {name:'Test hotel',persona:'Helpful',faqs:[],slas:{housekeeping:15,maintenance:30,front_desk:5}};
 const claims = {email_verified:true,firebase:{sign_in_provider:'password'}};
@@ -13,7 +13,7 @@ before(async()=>{
     const d=ctx.firestore();
     for(const h of ['ownerA','ownerB','test-hotel-001']){
       await setDoc(doc(d,'hotels',h),config);
-      await setDoc(doc(d,'hotels',h,'sessions','session1'),{guestUid:'guestA',lastUpdatedAt:Timestamp.now(),previewText:'Test',isUnread:false,status:'active'});
+      await setDoc(doc(d,'hotels',h,'sessions','session1'),{guestUid:'guestA',guestAccessStartedAt:Timestamp.now(),lastUpdatedAt:Timestamp.now(),previewText:'Test',isUnread:false,status:'active'});
     }
     for(const [uid,role,active] of [['agent','associate',true],['manager','manager',true],['inactive','associate',false]]){
       await setDoc(doc(d,'hotels','ownerA','members',uid),{uid,role,active});
@@ -53,4 +53,31 @@ test('anonymous user cannot provision a hotel',async()=>{
 });
 test('owner can provision their own hotel',async()=>{
   await assertSucceeds(setDoc(doc(db('newOwner'),'hotels','newOwner'),config));
+});
+
+test('expired and ended guest sessions deny messages and requests while staff retains access',async()=>{
+ const guest=db('guestA',{firebase:{sign_in_provider:'anonymous'}}), staff=db('agent');
+ await env.withSecurityRulesDisabled(async ctx=>{
+   const d=ctx.firestore();
+   for(const id of ['expired','ended','fresh','legacy']){
+     const session={guestUid:'guestA',lastUpdatedAt:Timestamp.now(),previewText:'Private',isUnread:false,status:'active'};
+     if(id!=='legacy')session.guestAccessStartedAt=Timestamp.fromMillis(Date.now()-(id==='expired'?25*3600000:1000));
+     if(id==='ended')session.guestEndedAt=Timestamp.now();
+     await setDoc(doc(d,'hotels','ownerA','sessions',id),session);
+     await setDoc(doc(d,'hotels','ownerA','sessions',id,'messages','msg'),{guestUid:'guestA',sender:'guest',text:'Private',timestamp:Timestamp.now()});
+     await setDoc(doc(d,'hotels','ownerA','requests',id),{guestUid:'guestA',sessionId:id,status:'pending'});
+   }
+ });
+ for(const id of ['expired','ended','legacy']){
+   await assertFails(getDoc(doc(guest,'hotels','ownerA','sessions',id)));
+   await assertFails(getDoc(doc(guest,'hotels','ownerA','sessions',id,'messages','msg')));
+   await assertFails(getDocs(query(collection(guest,'hotels','ownerA','sessions',id,'messages'),where('guestUid','==','guestA'))));
+   await assertFails(getDoc(doc(guest,'hotels','ownerA','requests',id)));
+   await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','requests',id)));
+   await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','sessions',id,'messages','msg')));
+ }
+ await assertSucceeds(getDocs(query(collection(guest,'hotels','ownerA','requests'),where('guestUid','==','guestA'),where('sessionId','==','fresh'))));
+ await assertFails(updateDoc(doc(guest,'hotels','ownerA','sessions','fresh'),{guestAccessStartedAt:serverTimestamp(),lastUpdatedAt:serverTimestamp()}));
+ await assertSucceeds(updateDoc(doc(guest,'hotels','ownerA','sessions','fresh'),{guestEndedAt:serverTimestamp(),lastUpdatedAt:serverTimestamp()}));
+ await assertFails(getDoc(doc(guest,'hotels','ownerA','sessions','fresh')));
 });
