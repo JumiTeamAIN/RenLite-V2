@@ -617,8 +617,8 @@ async function startServer() {
       if(votes.size>10000){res.status(422).json({error:'Select a shorter reporting period.'});return;}
       const interventions=await hotel.collection('staffInterventions').where('createdAt','>=',from).where('createdAt','<=',to).count().get();
       counts.staff_takeover=interventions.data().count;
-      const ratings=votes.docs.map(d=>d.data().rating).filter(n=>Number.isInteger(n)&&n>=1&&n<=5);
-      res.json({counts,feedback:{count:ratings.length,average:ratings.length?ratings.reduce((a,b)=>a+b,0)/ratings.length:null},from:from.toDate().toISOString(),to:to.toDate().toISOString()});
+      const summarize=(docs:any[])=>{const ratings=docs.map(d=>d.data().rating).filter(n=>Number.isInteger(n)&&n>=1&&n<=5);return {count:ratings.length,average:ratings.length?ratings.reduce((a,b)=>a+b,0)/ratings.length:null};};
+      res.json({counts,feedback:summarize(votes.docs.filter(d=>d.data().scope!=='conversation')),conversationFeedback:summarize(votes.docs.filter(d=>d.data().scope==='conversation')),from:from.toDate().toISOString(),to:to.toDate().toISOString()});
     } catch { res.status(500).json({error:'Unable to load assistance activity.'}); }
   });
 
