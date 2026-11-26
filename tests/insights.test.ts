@@ -74,3 +74,13 @@ test('attempt allowance rejects exhausted budgets and disabled search',()=>{
  assert.equal(estimateTokenDollars({model:'unknown'}),null);
  assert.ok(Math.abs(estimateTokenDollars({model:'gemini-3.5-flash-lite',inputTokens:1000000,outputTokens:1000000,thinkingTokens:1000000})!-5.3)<1e-9);
 });
+
+import {parseUploadedFaqs} from '../services/faqImport.ts';
+test('FAQ imports reject unsupported and binary files',()=>{
+ assert.throws(()=>parseUploadedFaqs('Q: Parking?\nA: $15','FAQ.docx'));
+ assert.throws(()=>parseUploadedFaqs('PK\u0003\u0004bad','FAQ.txt'));
+ assert.throws(()=>parseUploadedFaqs('bad\ufffd|answer','FAQ.csv'));
+ assert.deepEqual(parseUploadedFaqs('[{"question":"How much is parking?","answer":"$15 plus tax"}]','FAQ.JSON'),[{question:'How much is parking?',answer:'$15 plus tax'}]);
+ assert.deepEqual(parseUploadedFaqs('question,answer\nPool?,Sunup to Sundown','FAQ.csv'),[{question:'Pool?',answer:'Sunup to Sundown'}]);
+ assert.deepEqual(parseUploadedFaqs('Q: Breakfast?\nA: $25 plus tax and gratuity','FAQ.txt'),[{question:'Breakfast?',answer:'$25 plus tax and gratuity'}]);
+});
