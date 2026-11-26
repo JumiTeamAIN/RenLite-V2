@@ -92,6 +92,7 @@ service cloud.firestore {
           'guestUid',
           'guestAccessStartedAt',
           'guestEndedAt',
+          'roomMoveAt',
           'roomNumber',
           'locationId',
           'locationLabel',
@@ -111,6 +112,7 @@ service cloud.firestore {
         data.lastUpdatedAt is timestamp &&
         (!('guestAccessStartedAt' in data) || data.guestAccessStartedAt is timestamp) &&
         (!('guestEndedAt' in data) || data.guestEndedAt is timestamp) &&
+        (!('roomMoveAt' in data) || data.roomMoveAt is timestamp) &&
         data.previewText is string && data.previewText.size() <= 5000 &&
         (!('previewStaffText' in data) || (data.previewStaffText is string && data.previewStaffText.size() <= 5000)) &&
         data.isUnread is bool &&
@@ -226,7 +228,7 @@ service cloud.firestore {
           isValidSession(incoming()) &&
           incoming().guestUid == request.auth.uid &&
           incoming().status == 'active' &&
-          incoming().guestAccessStartedAt == request.time && !('guestEndedAt' in incoming()) &&
+          incoming().guestAccessStartedAt == request.time && !('guestEndedAt' in incoming()) && !('roomMoveAt' in incoming()) &&
           incoming().lastUpdatedAt == request.time &&
           exists(/databases/$(database)/documents/hotels/$(hotelId));
         allow update: if isSignedIn() &&
@@ -234,6 +236,7 @@ service cloud.firestore {
           isValidId(sessionId) &&
           isValidSession(incoming()) &&
           incoming().guestUid == existing().guestUid &&
+          (!('roomMoveAt' in existing()) || !incoming().diff(existing()).affectedKeys().hasAny(['roomNumber','locationId','locationLabel','locationType'])) &&
           incoming().lastUpdatedAt == request.time &&
           (
             (
@@ -396,7 +399,8 @@ service cloud.firestore {
             isSandboxAdmin(hotelId) ||
             (
               (!('guestUid' in incoming()) || incoming().guestUid == request.auth.uid) &&
-              guestCanAccessSession(hotelId, incoming().sessionId)
+              guestCanAccessSession(hotelId, incoming().sessionId) &&
+              (!('roomMoveAt' in get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)).data) || incoming().roomNumber == get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)).data.roomNumber)
             )
           );
         allow update: if isSignedIn() &&
@@ -437,6 +441,7 @@ service cloud.firestore {
             ) ||
             (
               existing().status == 'completed' &&
+              (!('roomMoveAt' in get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(existing().sessionId)).data) || existing().roomNumber == get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(existing().sessionId)).data.roomNumber) &&
               incoming().status == 'reopened' &&
               existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId) &&
               incoming().guestUid == existing().guestUid &&
