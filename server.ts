@@ -277,6 +277,25 @@ async function startServer() {
     } catch { return null; }
   };
 
+  app.get('/api/team/hotels', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await verifiedStaff(req);
+    if (!user) { res.status(401).json({ error: 'Verified staff sign-in required.' }); return; }
+    try {
+      const db = teamDb();
+      const index = await db.collection('staffUsers').doc(user.uid).collection('hotels').get();
+      const ids = [...new Set([user.uid, ...index.docs.map(d => d.id)])];
+      const hotels = await Promise.all(ids.map(async id => {
+        const hotel = db.collection('hotels').doc(id);
+        const [property, member] = await Promise.all([hotel.get(), hotel.collection('members').doc(user.uid).get()]);
+        const data = member.data();
+        if (!property.exists || (id !== user.uid && (data?.active !== true || !['admin','manager','associate'].includes(data.role)))) return null;
+        return { hotelId: id, name: property.data()?.name || id, role: id === user.uid ? 'admin' : data?.role };
+      }));
+      res.json({ hotels: hotels.filter(Boolean) });
+    } catch { res.status(500).json({ error: 'Unable to load hotel memberships.' }); }
+  });
+
   app.post('/api/team/invitations', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     const user = await verifiedStaff(req);
