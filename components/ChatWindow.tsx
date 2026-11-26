@@ -22,9 +22,28 @@ import {
 import { submitServiceRequest, reopenGuestRequest } from '../services/requestService';
 import { HotelConfig, Message, Request, Session } from '../types';
 
+// Explicit opt-in after a conversation closing, rather than a survey after every reply.
+const closingText = (text:string) => /^(?:thanks(?: so much| for your help)?|thank you(?: so much| for your help)?|no[, ]+thank you|no[, ]+that['’]s all(?:[, ]+thank you)?|that['’]s all(?:[, ]+thanks)?|all set|gracias(?: por tu ayuda)?|merci(?: beaucoup)?)[.!\s]*$/iu.test(text.trim());
 const ResponseFeedback: React.FC<{hotelId:string;sessionId:string;messageId:string}> = ({hotelId,sessionId,messageId}) => {
   const [rating,setRating]=useState(0);
-  const [status,setStatus]=useState<'idle'|'sending'|'saved'|'unavailable'|'error'>('idle');
+  const [status,setStatus]=useState<'idle'|'sending'|'saved'|'unavailable'|'error'>('unavailable');
+  const [offered,setOffered]=useState(false);
+  useEffect(()=>{
+    let cancelled=false;
+    const key='renlite-feedback:'+hotelId+':'+sessionId;
+    let stored=0;
+    try{stored=Number(localStorage.getItem(key)||0);}catch{}
+    if(Date.now()-stored<86400000)return;
+    // A session-level server reservation prevents repeated prompts across refreshes/devices.
+    (async()=>{
+      try{
+        const user=auth.currentUser;if(!user)return;
+        const res=await fetch('/api/insights/feedback-offer',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+await user.getIdToken()},body:JSON.stringify({hotelId,sessionId,guestMessageId:messageId.slice(3)})});
+        if(res.ok&&!cancelled){try{localStorage.setItem(key,String(Date.now()));}catch{}setOffered(true);setStatus('idle');}
+      }catch{}
+    })();
+    return()=>{cancelled=true;};
+  },[hotelId,sessionId,messageId]);
   const submit=async()=>{
     if(!rating||status==='sending')return;
     setStatus('sending');
@@ -35,14 +54,15 @@ const ResponseFeedback: React.FC<{hotelId:string;sessionId:string;messageId:stri
       setStatus(res.ok||res.status===409?'saved':res.status===403?'unavailable':'error');
     }catch{setStatus('error');}
   };
-  if(status==='unavailable')return null;
+  if(!offered||status==='unavailable')return null;
   if(status==='saved')return <p role="status" className="text-xs text-slate-500 mt-2">Thank you for your feedback.</p>;
   return <div className="mt-3 pt-2 border-t border-slate-200 text-xs space-y-2">
-    <p className="text-slate-600">How helpful was this response? (Optional)</p>
-    <div className="flex flex-wrap gap-1" role="group" aria-label="Rate response from 1 to 5">
+    <p className="text-slate-600">How helpful was Ren during this conversation? (Optional)</p>
+    <div className="flex flex-wrap gap-1" role="group" aria-label="Rate Ren from 1 to 5">
       {[1,2,3,4,5].map(n=><button key={n} type="button" aria-label={n+' out of 5 stars'} aria-pressed={rating===n} disabled={status==='sending'} onClick={()=>setRating(n)} className={'p-2 rounded text-lg '+(n<=rating?'text-amber-600':'text-slate-400')}>{n<=rating?'★':'☆'}</button>)}
     </div>
     {rating>0&&<button type="button" disabled={status==='sending'} onClick={()=>void submit()} className="text-indigo-700 font-semibold">{status==='sending'?'Sending…':'Submit rating'}</button>}
+    <button type="button" disabled={status==='sending'} onClick={()=>setStatus('unavailable')} className="text-slate-500 ml-2">Not now</button>
     {status==='error'&&<p role="alert" className="text-red-700">Feedback could not be saved. Try again.</p>}
   </div>;
 };
@@ -857,7 +877,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                     {hasGuestTranslation && showOriginal && (
                       <div className="mt-1 text-xs text-slate-300 italic">{msg.text}</div>
                     )}
-                    {sessionId && msg.sender==='ai' && msg.id.startsWith('ai-') && msg.id===messages[messages.length-1]?.id && <ResponseFeedback key={sessionId+':'+msg.id} hotelId={hotelId} sessionId={sessionId} messageId={msg.id} />}
+                    {sessionId && session?.status==='active' && !isThinking && !isSending && msg.sender==='ai' && msg.id.startsWith('ai-') && msg.id===messages[messages.length-1]?.id && messages.some(m=>m.sender==='guest'&&m.id===msg.id.slice(3)&&closingText(m.text)) && guestRequests.every(r=>['completed','cancelled'].includes(r.status)) && <ResponseFeedback key={sessionId+':'+msg.id} hotelId={hotelId} sessionId={sessionId} messageId={msg.id} />}
                   </div>
                 </div>
               );
