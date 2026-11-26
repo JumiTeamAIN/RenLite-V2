@@ -337,6 +337,16 @@ export const sendMessageToAI = async (
       throw new Error(data?.error || `Server error (${res.status})`);
     }
 
+    // Do not apply a model result produced against an earlier room assignment.
+    const refreshed=await getDoc(doc(db,sessionPath));
+    if(!refreshed.exists())throw Error('Conversation unavailable');
+    const currentRoomSession=refreshed.data() as Session;
+    if(currentRoomSession.roomMoveAt?.toMillis()!==sessionData.roomMoveAt?.toMillis()){
+      throw Error('Room changed while Ren was responding. Please use Quick Request or contact staff.');
+    }
+    if(['staff_controlled','completed'].includes(currentRoomSession.status))return;
+    sessionData=currentRoomSession;
+
     let responseText: string = (
       typeof data?.text === 'string' && data.text.trim()
         ? data.text.trim()
@@ -345,12 +355,11 @@ export const sendMessageToAI = async (
 
     const rawDetectedRoom = (typeof data.roomNumber === 'string' && data.roomNumber.trim()) || '';
     const matchedLocation = normalizeLocationMatch(
-      rawDetectedRoom || sessionData?.roomNumber || '',
+      sessionData.roomMoveAt ? sessionData.roomNumber || '' : rawDetectedRoom || sessionData?.roomNumber || '',
       hotelConfig.locations
     );
     const resolvedRoomNumber = (
-      matchedLocation?.code ||
-      rawDetectedRoom ||
+      (sessionData.roomMoveAt ? sessionData.roomNumber : matchedLocation?.code || rawDetectedRoom) ||
       sessionData?.roomNumber ||
       ''
     ).slice(0, 50);
@@ -367,7 +376,7 @@ export const sendMessageToAI = async (
         : undefined;
 
     // 6. Backfill any pending requests waiting for a room/location FIRST
-    if (resolvedRoomNumber && guestUid) {
+    if (resolvedRoomNumber && guestUid && !sessionData.roomMoveAt) {
       const requestsPath = `hotels/${hotelId}/requests`;
       for (const reqDoc of existingRequests) {
         if (
@@ -412,7 +421,7 @@ export const sendMessageToAI = async (
               ? 'escalated'
               : 'pending',
           source: 'ai',
-          openRequests: existingRequests,
+          openRequests: existingRequests.filter(r=>r.roomNumber===resolvedRoomNumber || (!sessionData?.roomMoveAt && ['Pending room #','Location needed',''].includes(r.roomNumber))),
         });
 
         if (result.outcome === 'created') {
@@ -512,10 +521,7 @@ export const sendMessageToAI = async (
         ? { previewStaffText: staffResponseText }
         : { previewStaffText: responseText }),
       isUnread: Boolean(data.escalation?.triggered || data.humanHandoffRequested),
-      ...(resolvedRoomNumber ? { roomNumber: resolvedRoomNumber } : {}),
-      ...(matchedLocation?.id ? { locationId: matchedLocation.id } : {}),
-      ...(resolvedLocationLabel ? { locationLabel: resolvedLocationLabel } : {}),
-      ...(matchedLocation?.type ? { locationType: matchedLocation.type } : {}),
+      ...(!current.data().roomMoveAt ? {...(resolvedRoomNumber ? { roomNumber: resolvedRoomNumber } : {}),...(matchedLocation?.id ? { locationId: matchedLocation.id } : {}),...(resolvedLocationLabel ? { locationLabel: resolvedLocationLabel } : {}),...(matchedLocation?.type ? { locationType: matchedLocation.type } : {})} : {}),
       ...(guestLanguage ? { guestLanguage } : {}),
       ...(nextStatus ? { status: nextStatus } : {}),
       ...(data.escalation?.triggered && data.escalation.reason
