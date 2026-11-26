@@ -450,6 +450,41 @@ async function startServer() {
     } catch { res.status(500).json({ error: 'Unable to accept invitation.' }); }
   });
 
+  // Record actual transitions atomically with the staff message/session update.
+  app.post('/api/insights/staff-action', async (req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req);
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const {hotelId,sessionId,action,messageId,text,guestText,targetLanguage}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(messageId)||!['takeover','reply'].includes(action)||
+      (action==='reply'&&(typeof text!=='string'||!text.trim()||text.length>5000))||
+      (guestText!==undefined&&(typeof guestText!=='string'||guestText.length>5000))||
+      (targetLanguage!==undefined&&(typeof targetLanguage!=='string'||targetLanguage.length>20))){res.status(400).json({error:'Invalid staff action.'});return;}
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId);
+      const message=session.collection('messages').doc(messageId);
+      const event=hotel.collection('staffInterventions').doc(createHash('sha256').update(sessionId+'|'+messageId).digest('hex'));
+      const outcome=await db.runTransaction(async tx=>{
+        const [h,m,ss,existing]=await Promise.all([tx.get(hotel),tx.get(hotel.collection('members').doc(user.uid)),tx.get(session),tx.get(message)]);
+        const member=m.data(),current=ss.data();
+        if(!h.exists||!(teamAdmin(user.uid,hotelId,true,member,user.email)||(member?.active===true&&['manager','associate'].includes(member.role))))return 'denied';
+        if(!ss.exists||!current?.guestUid||current.status==='completed')return 'unavailable';
+        if(existing.exists)return existing.data()?.staffUid===user.uid?'saved':'unavailable';
+        const transition=current.status!=='staff_controlled';
+        if(action==='takeover'&&!transition)return 'saved';
+        const translated=action==='reply'&&typeof guestText==='string'&&guestText.trim()&&guestText!==text;
+        const content=action==='reply'?text.trim():'A hotel associate has taken over this conversation to assist you directly.';
+        tx.create(message,{sender:action==='reply'?'staff':'system',guestUid:current.guestUid,staffUid:user.uid,text:content,timestamp:FieldValue.serverTimestamp(),...(translated?{guestText,originalLanguage:'en',translatedToLanguage:targetLanguage||'unknown'}:{})});
+        tx.update(session,{lastUpdatedAt:FieldValue.serverTimestamp(),isUnread:false,status:'staff_controlled',assignedStaffUid:user.uid,...(user.email?{assignedStaffEmail:user.email}:{}),...(action==='reply'?{previewText:translated?guestText:content,previewStaffText:content,...(targetLanguage?{guestLanguage:targetLanguage}:{})}:{})});
+        if(transition)tx.create(event,{kind:'staff_takeover',createdAt:FieldValue.serverTimestamp(),version:1});
+        return 'saved';
+      });
+      if(outcome==='denied'){res.status(403).json({error:'Hotel staff access required.'});return;}
+      if(outcome==='unavailable'){res.status(409).json({error:'Conversation unavailable.'});return;}
+      res.json({ok:true});
+    }catch{res.status(500).json({error:'Unable to confirm staff action.'});}
+  });
+
   // Feedback is one immutable vote per guest-owned, backend-recorded turn.
   app.post('/api/insights/feedback', async (req,res) => {
     res.set('Cache-Control','no-store');
@@ -467,7 +502,7 @@ async function startServer() {
       const feedback=hotel.collection('assistanceFeedback').doc(id);
       const result=await teamDb().runTransaction(async tx=>{
         const [s,e,reply,f]=await Promise.all([tx.get(session),tx.get(event),tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(feedback)]);
-        if(!s.exists||s.data()?.guestUid!==uid||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested'].includes(e.data()?.kind))return 'denied';
+        if(!s.exists||s.data()?.guestUid!==uid||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested','configured_faq_match'].includes(e.data()?.kind))return 'denied';
         if(f.exists)return 'duplicate';
         tx.create(feedback,{rating,createdAt:FieldValue.serverTimestamp(),version:1});
         return 'saved';
@@ -532,7 +567,7 @@ async function startServer() {
       }
       const from=Timestamp.fromMillis(Date.now()-days*86400000);
       const to=Timestamp.now();
-      const kinds=['grounded_recommendation','request_suggested','handoff','reply_generated','search_unavailable','failed'] as const;
+      const kinds=['grounded_recommendation','request_suggested','handoff','reply_generated','search_unavailable','failed','configured_faq_match'] as const;
       const base=hotel.collection('assistanceEvents').where('createdAt','>=',from).where('createdAt','<=',to);
       const counts:Record<string,number>=Object.fromEntries(kinds.map(k=>[k,0]));
       const snapshot=await base.limit(10001).get();
@@ -540,6 +575,8 @@ async function startServer() {
       for(const event of snapshot.docs){const k=event.data().kind;if(kinds.includes(k))counts[k]++;}
       const votes=await hotel.collection('assistanceFeedback').where('createdAt','>=',from).where('createdAt','<=',to).limit(10001).get();
       if(votes.size>10000){res.status(422).json({error:'Select a shorter reporting period.'});return;}
+      const interventions=await hotel.collection('staffInterventions').where('createdAt','>=',from).where('createdAt','<=',to).count().get();
+      counts.staff_takeover=interventions.data().count;
       const ratings=votes.docs.map(d=>d.data().rating).filter(n=>Number.isInteger(n)&&n>=1&&n<=5);
       res.json({counts,feedback:{count:ratings.length,average:ratings.length?ratings.reduce((a,b)=>a+b,0)/ratings.length:null},from:from.toDate().toISOString(),to:to.toDate().toISOString()});
     } catch { res.status(500).json({error:'Unable to load assistance activity.'}); }
@@ -654,7 +691,7 @@ async function startServer() {
     const areaHint = extractAreaHint(persona, safeFaqs);
     // Best-effort telemetry: require a real guest-owned message and deduplicate by turn.
     // A generated response is not proof of delivery, resolution or labor displacement.
-    const recordAssistance = async (kind: string) => {
+    const recordAssistance = async (kind: string, reply?: string) => {
       const {hotelId,sessionId,guestMessageId}=body;
       if (!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)) return;
       try {
@@ -667,7 +704,12 @@ async function startServer() {
           if (!h.exists || !s.exists || s.data()?.guestUid!==decodedUid || ['staff_controlled','completed'].includes(s.data()?.status) ||
               !m.exists || m.data()?.sender!=='guest' || m.data()?.guestUid!==decodedUid || m.data()?.text?.trim()!==latestGuestMessage) return;
           if (e.exists) return;
-          tx.create(event,{kind,createdAt:FieldValue.serverTimestamp(),version:1});
+          // Exact configured FAQ match is intentionally narrow; never trust browser-supplied FAQs for classification.
+          const normalize=(v:unknown)=>typeof v==='string'?v.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim():'';
+          const question=normalize(latestGuestMessage),answer=normalize(reply);
+          const faqs=h.data()?.faqs;
+          const matched=kind==='reply_generated'&&question.length>=5&&answer.length>=3&&Array.isArray(faqs)&&faqs.some(f=>normalize(f?.question)===question&&normalize(f?.answer).length>=3&&answer===normalize(f.answer));
+          tx.create(event,{kind:matched?'configured_faq_match':kind,createdAt:FieldValue.serverTimestamp(),version:1});
         });
       } catch { console.warn('[insights] assistance event unavailable'); }
     };
@@ -1164,7 +1206,7 @@ ACTION & EXTRACTION RULES:
         parsed.humanHandoffRequested === true ||
         String(parsed.humanHandoffRequested).toLowerCase() === 'true';
 
-      await recordAssistance(escalationTriggered || humanHandoffRequested ? 'handoff' : normalizedRequests.length ? 'request_suggested' : !(typeof parsed.reply==='string' && parsed.reply.trim()) ? 'failed' : requiresLocalGrounding && !verifiedLocalFindings ? 'search_unavailable' : 'reply_generated');
+      await recordAssistance(escalationTriggered || humanHandoffRequested ? 'handoff' : normalizedRequests.length ? 'request_suggested' : !(typeof parsed.reply==='string' && parsed.reply.trim()) ? 'failed' : requiresLocalGrounding && !verifiedLocalFindings ? 'search_unavailable' : 'reply_generated',text);
       res.json({
         searchDiagnostics,
         text,
