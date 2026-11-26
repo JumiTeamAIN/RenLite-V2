@@ -49,3 +49,15 @@ test('exact configured FAQ bypass only for unambiguous informational questions',
  assert.equal(directFaqAnswer('Where is the fire exit?',[{question:'Where is the fire exit?',answer:'Lobby'}]),null);
  assert.equal(directFaqAnswer('¿A qué hora es el desayuno?',f),null);
 });
+
+import { DEFAULT_MODEL_POLICY, parseModelPolicy, candidateModels, courtesyReply } from '../services/modelPolicy.ts';
+test('model policy defaults to only tested model and never retries a cooling candidate',()=>{
+ assert.deepEqual(candidateModels(DEFAULT_MODEL_POLICY,'concierge',()=>false),['gemini-2.5-flash']);
+ assert.deepEqual(candidateModels(DEFAULT_MODEL_POLICY,'search',()=>true),[]);
+ assert.deepEqual(candidateModels({...DEFAULT_MODEL_POLICY,enabled:false},'translation',()=>false),[]);
+ assert.deepEqual(candidateModels({...DEFAULT_MODEL_POLICY,fallback:'gemini-3.5-flash-lite'},'concierge',m=>m==='gemini-2.5-flash'),['gemini-3.5-flash-lite']);
+ assert.equal(parseModelPolicy({...DEFAULT_MODEL_POLICY,search:'arbitrary-model'}),null);
+ assert.equal(parseModelPolicy({...DEFAULT_MODEL_POLICY,enabled:'false'}),null);
+ assert.ok(courtesyReply('Thank you!'));
+ assert.equal(courtesyReply('Thanks, but I need a towel'),null);
+});

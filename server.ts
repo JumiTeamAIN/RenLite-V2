@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { DEFAULT_MODEL_POLICY, parseModelPolicy, candidateModels, courtesyReply, validModel, MODEL_IDS, type ModelPolicy } from './services/modelPolicy.ts';
 import { directFaqAnswer } from './services/directFaq.ts';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -295,13 +296,63 @@ async function startServer() {
     } catch { return null; }
   };
 
+  const modelPolicyRef=()=>teamDb().collection('platformSettings').doc('modelPolicy');
+  async function loadModelPolicy():Promise<ModelPolicy>{
+    const snap=await modelPolicyRef().get();
+    if(!snap.exists)return {...DEFAULT_MODEL_POLICY};
+    const parsed=parseModelPolicy(snap.data());
+    if(!parsed)throw Object.assign(new Error('AI configuration unavailable.'),{status:503});
+    return parsed;
+  }
+  const developer=async(req:express.Request)=>(await verifiedStaff(req))?.email==='jumi@teamain.org';
+  app.get('/api/developer/model-policy',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    if(!await developer(req)){res.status(403).json({error:'Developer access required.'});return;}
+    try{res.json({policy:await loadModelPolicy(),models:MODEL_IDS});}catch{res.status(503).json({error:'AI configuration unavailable.'});}
+  });
+  app.post('/api/developer/model-policy',async(req,res)=>{
+    if(!await developer(req)){res.status(403).json({error:'Developer access required.'});return;}
+    const policy=parseModelPolicy(req.body);
+    if(!policy){res.status(400).json({error:'Invalid model configuration.'});return;}
+    try{await modelPolicyRef().set({...policy,updatedAt:FieldValue.serverTimestamp()});res.json({policy});}catch{res.status(503).json({error:'Could not save model configuration.'});}
+  });
+  const policyCandidates=(policy:ModelPolicy,operation:'concierge'|'search'|'translation',client:GoogleGenAI)=>candidateModels(policy,operation,isModelOnCooldown).map(model=>({model,client,retries:1}));
+  // A diagnostic makes exactly one explicit call with fictional content. No guest data.
+  app.post('/api/developer/model-probe',async(req,res)=>{
+    if(!await developer(req)){res.status(403).json({error:'Developer access required.'});return;}
+    const {model,operation}=req.body||{};
+    if(!validModel(model)||!['concierge','search','translation'].includes(operation)){res.status(400).json({error:'Invalid model or test.'});return;}
+    const started=Date.now();
+    try{
+      const policy=await loadModelPolicy();
+      if(!policy.enabled){res.status(409).json({error:'AI disabled. Enable before testing.'});return;}
+      // Prevent rapid repeat tests across instances using a transaction.
+      const gate=teamDb().collection('platformSettings').doc('modelProbeGate');
+      const permitted=await teamDb().runTransaction(async tx=>{
+        const current=await tx.get(gate);
+        if(Date.now()-(current.data()?.lastAt?.toMillis?.()||0)<10000)return false;
+        tx.set(gate,{lastAt:FieldValue.serverTimestamp()});return true;
+      });
+      if(!permitted){res.status(429).json({error:'Wait ten seconds between probes.'});return;}
+      const {betaClient}=getAiClients();
+      const prompt=operation==='search'?'Use Google Search to identify one real restaurant in downtown Plantation, Florida. Return its name and a brief description.':operation==='translation'?'Translate into Spanish: Your room is ready.': 'Return JSON with item, quantity and department for this fictional hotel request: I need two towels.';
+      const result=await measuredAi(model,'probe-'+operation,'unattributed',()=>betaClient.models.generateContent({model,contents:prompt,config:{maxOutputTokens:512,abortSignal:AbortSignal.timeout(15000),...(operation==='search'?{tools:[{googleSearch:{}}]}:operation==='concierge'?{responseMimeType:'application/json'}:{})}}));
+      const meta=result.candidates?.[0]?.groundingMetadata;
+      const sources=(meta?.groundingChunks||[]).filter(c=>Boolean(c.web?.uri)).length;
+      const supported=(meta?.groundingSupports||[]).some(c=>Boolean(c.groundingChunkIndices?.length));
+      res.json({ok:true,model,operation,elapsedMs:Date.now()-started,text:result.text?.slice(0,2000)||'',sources,grounded:sources>0&&supported,usage:result.usageMetadata||null});
+    }catch(err){res.json({ok:false,model,operation,status:getHttpStatusFromError(err),elapsedMs:Date.now()-started});}
+  });
+
   // Aggregate usage only: never persist prompts, transcripts, tokens or guest identifiers.
   // Counts reflect this RenLite backend, not Google's invoice or other Project Omni apps.
   async function measuredAi<T extends {usageMetadata?: any; candidates?: any[]}>(model:string,operation:string,hotel:string,call:()=>Promise<T>):Promise<T>{
     const month=new Date().toISOString().slice(0,7);
     const started=Date.now();
     let result:T|undefined;
+    let errorStatus=0;
     try { result=await call(); return result; }
+    catch(err){errorStatus=getHttpStatusFromError(err);if([404,429,500,502,503,504].includes(errorStatus))markModelCooldown(model,errorStatus);throw err;}
     finally {
       const usage=result?.usageMetadata;
       const count=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0?Math.floor(v):0;
@@ -310,7 +361,7 @@ async function startServer() {
         await teamDb().collection('platformAiUsage').doc(key).set({
           month,model,operation,hotel,
           attempts:FieldValue.increment(1),successfulResponses:FieldValue.increment(result?1:0),
-          errors:FieldValue.increment(result?0:1),missingUsage:FieldValue.increment(usage?0:1),
+          errors:FieldValue.increment(result?0:1),...(errorStatus?{['error_'+errorStatus]:FieldValue.increment(1)}:{}),missingUsage:FieldValue.increment(usage?0:1),
           inputTokens:FieldValue.increment(count(usage?.promptTokenCount)),
           outputTokens:FieldValue.increment(count(usage?.candidatesTokenCount)),
           thinkingTokens:FieldValue.increment(count(usage?.thoughtsTokenCount)),
@@ -819,7 +870,7 @@ async function startServer() {
 
     // Exact configured English FAQ only. Ambiguous matches and safety signals use normal handling.
     if(trustedHotel&&!safetySignal.triggered){
-      const answer=directFaqAnswer(latestGuestMessage,safeFaqs);
+      const answer=directFaqAnswer(latestGuestMessage,safeFaqs)||courtesyReply(latestGuestMessage);
       if(answer){
         await recordAssistance('reply_generated',answer);
         res.json({text:answer,guestLanguage:'en',roomNumber:knownRoomNumber,humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});
@@ -828,6 +879,8 @@ async function startServer() {
     }
 
     try {
+      const policy=await loadModelPolicy();
+      if(!policy.enabled)throw Object.assign(new Error('AI temporarily unavailable. Please use Quick Request or Speak with Staff.'),{status:503});
       const { defaultClient, betaClient } = getAiClients();
 
       type ModelCandidate = {
@@ -842,16 +895,7 @@ async function startServer() {
         if (remaining <= 0) throw new Error('Concierge model time budget exhausted');
         return AbortSignal.timeout(Math.min(maxMs, remaining));
       };
-      const allCandidates: ModelCandidate[] = [
-        { model: 'gemini-4-hydrogen', client: defaultClient, retries: 2 },
-        { model: 'gemini-3.1-flash-lite', client: defaultClient, retries: 1 },
-        { model: 'gemini-2.5-flash', client: betaClient, retries: 1 },
-      ];
-
-      const getOrderedCandidates = () => {
-        const active = allCandidates.filter((c) => !isModelOnCooldown(c.model));
-        return active.length > 0 ? active : allCandidates;
-      };
+      const getOrderedCandidates = () => policyCandidates(policy,'concierge',betaClient);
 
       // Optional step: Ground external/local recommendations using Google Search so real places are verified
       let verifiedLocalFindings = '';
@@ -874,14 +918,7 @@ async function startServer() {
         (Boolean(knownGuestLang) && !knownGuestLang.startsWith('en'));
 
       if (requiresLocalGrounding) {
-        const preferredSearchModel = (process.env.GEMINI_SEARCH_MODEL || '').trim();
-        const searchPool: ModelCandidate[] = [
-          ...(preferredSearchModel ? [{ model: preferredSearchModel, client: betaClient, retries: 1 }] : []),
-          { model: 'gemini-2.5-flash', client: betaClient, retries: 1 },
-          { model: 'gemini-3.1-flash-lite', client: defaultClient, retries: 1 },
-          { model: 'gemini-4-hydrogen', client: defaultClient, retries: 1 },
-        ];
-        const searchCandidates = searchPool.filter((c, i) => searchPool.findIndex(x => x.model === c.model) === i);
+        const searchCandidates=policyCandidates(policy,'search',betaClient);
         const searchDeadline = Math.min(conciergeDeadline, Date.now() + (mightContainServiceOrHandoff || assumeNonEnglish ? 18000 : 28000));
         console.info('[concierge-search] intent detected', { areaConfigured: Boolean(areaHint), modelCount: searchCandidates.length });
         const searchTarget =
@@ -1138,7 +1175,7 @@ ACTION & EXTRACTION RULES:
             }
 
             // Schema/argument error on a specific model: try raw JSON prompt fallback once
-            if (errStatus === 400) {
+            if (errStatus === 400 && !isModelOnCooldown(candidate.model)) {
               console.log(
                 `[concierge] Structured schema returned 400 on ${candidate.model}, trying JSON prompt fallback.`
               );
@@ -1180,7 +1217,7 @@ ACTION & EXTRACTION RULES:
       }
 
       if (!response) {
-        throw lastErr || new Error('All Gemini concierge models are temporarily unavailable.');
+        throw lastErr || Object.assign(new Error('All configured AI models are temporarily unavailable.'),{status:503});
       }
 
       const rawText = response.text?.trim() || '{}';
@@ -1397,13 +1434,7 @@ ACTION & EXTRACTION RULES:
 
     try {
       const { defaultClient, betaClient } = getAiClients();
-      const allCandidates = [
-        { model: 'gemini-4-hydrogen', client: defaultClient, retries: 2 },
-        { model: 'gemini-3.1-flash-lite', client: defaultClient, retries: 1 },
-        { model: 'gemini-2.5-flash', client: betaClient, retries: 1 },
-      ];
-      const active = allCandidates.filter((c) => !isModelOnCooldown(c.model));
-      const candidates = active.length > 0 ? active : allCandidates;
+      const candidates=policyCandidates(policy,'translation',betaClient);
 
       let response: Awaited<ReturnType<typeof defaultClient.models.generateContent>> | null = null;
       let lastErr: unknown = null;
@@ -1578,13 +1609,7 @@ ${text}`;
 
     try {
       const { defaultClient, betaClient } = getAiClients();
-      const allCandidates = [
-        { model: 'gemini-4-hydrogen', client: defaultClient, retries: 2 },
-        { model: 'gemini-3.1-flash-lite', client: defaultClient, retries: 1 },
-        { model: 'gemini-2.5-flash', client: betaClient, retries: 1 },
-      ];
-      const active = allCandidates.filter((c) => !isModelOnCooldown(c.model));
-      const candidates = active.length > 0 ? active : allCandidates;
+      const candidates=policyCandidates(policy,'translation',betaClient);
 
       let response: Awaited<ReturnType<typeof defaultClient.models.generateContent>> | null = null;
       let lastErr: unknown = null;

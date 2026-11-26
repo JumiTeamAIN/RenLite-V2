@@ -25,7 +25,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.ok(ready,'test server available');
     const suffix=Date.now();
     async function account(label,verified=true){
-      const email=label+suffix+'@example.test', password='Test-password-123!';
+      const email=label==='developer'?'jumi@teamain.org':label+suffix+'@example.test', password='Test-password-123!';
       const u=await auth.createUser({email,password,emailVerified:verified});
       const r=await fetch('http://'+process.env.FIREBASE_AUTH_EMULATOR_HOST+'/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password,returnSecureToken:true})});
       assert.equal(r.status,200);
@@ -37,6 +37,22 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
       const response=await fetch(base+'/api/team/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
       return {status:response.status,data:await response.json()};
     }
+    const dev=await account('developer');
+    async function policyCall(a,path,body){
+      const r=await fetch(base+'/api/developer/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+      return {status:r.status,data:await r.json()};
+    }
+    assert.equal((await policyCall(owner,'model-policy')).status,403);
+    const initial=await policyCall(dev,'model-policy');
+    assert.equal(initial.status,200);
+    assert.equal(initial.data.policy.concierge,'gemini-2.5-flash');
+    assert.equal((await policyCall(owner,'model-policy',initial.data.policy)).status,403);
+    assert.equal((await policyCall(dev,'model-policy',{...initial.data.policy,search:'unknown'})).status,400);
+    assert.equal((await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false})).status,200);
+    assert.equal((await policyCall(dev,'model-policy')).data.policy.enabled,false);
+    assert.equal((await policyCall(dev,'model-probe',{model:'gemini-2.5-flash',operation:'search'})).status,409);
+    assert.equal((await policyCall(owner,'model-probe',{model:'gemini-2.5-flash',operation:'search'})).status,403);
+    assert.equal((await policyCall(dev,'model-policy',initial.data.policy)).status,200);
     const payload={hotelId:owner.uid,email:agent.email,role:'associate',department:'Front Desk'};
     assert.equal((await call(other,'invitations',payload)).status,403);
     assert.equal((await call(unverified,'invitations',payload)).status,401);
