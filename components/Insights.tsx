@@ -125,6 +125,8 @@ export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;req
       {activityError?<p role="alert" className="text-sm text-red-700">{activityError}</p>:activity===null?<p role="status" className="text-sm">Loading activity…</p>:<div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
         {metric('Grounded local replies',activity.grounded_recommendation||0,'Direct search-grounded response generated')}
         {metric('Request suggestions',activity.request_suggested||0,'Model proposed a request; not proof of logging')}
+        {metric('Configured FAQ matches',activity.configured_faq_match||0,'Exact configured question and answer matches; not proven resolution')}
+        {metric('Staff takeovers',activity.staff_takeover||0,'Recorded transitions to staff control, including staff replies')}
         {metric('Other replies generated',activity.reply_generated||0,'May include greetings and clarification')}
         {metric('Human handoff signals',activity.handoff||0,'Model requested staff or escalation')}
         {metric('Search unavailable',activity.search_unavailable||0,'No verified local findings')}
