@@ -1433,8 +1433,11 @@ ACTION & EXTRACTION RULES:
     }
 
     try {
+      const policy=await loadModelPolicy();
+      if(!policy.enabled) { res.status(503).json({error:'AI translation is temporarily unavailable.'}); return; }
       const { defaultClient, betaClient } = getAiClients();
       const candidates=policyCandidates(policy,'translation',betaClient);
+      if(!candidates.length) { res.status(503).json({error:'AI translation is temporarily unavailable.'}); return; }
 
       let response: Awaited<ReturnType<typeof defaultClient.models.generateContent>> | null = null;
       let lastErr: unknown = null;
@@ -1608,8 +1611,11 @@ ${text}`;
     }
 
     try {
+      const policy=await loadModelPolicy();
+      if(!policy.enabled) { res.status(503).json({error:'AI translation is temporarily unavailable.'}); return; }
       const { defaultClient, betaClient } = getAiClients();
       const candidates=policyCandidates(policy,'translation',betaClient);
+      if(!candidates.length) { res.status(503).json({error:'AI translation is temporarily unavailable.'}); return; }
 
       let response: Awaited<ReturnType<typeof defaultClient.models.generateContent>> | null = null;
       let lastErr: unknown = null;
