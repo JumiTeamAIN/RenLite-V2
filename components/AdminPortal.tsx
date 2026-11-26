@@ -523,37 +523,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         shouldTranslateStaffReply && guestTranslated && guestTranslated !== trimmed
       );
 
-      const batch = writeBatch(db);
-      batch.set(doc(collection(db, path)), {
-        sender: 'staff',
-        guestUid: selectedSession.guestUid,
-        staffUid: auth.currentUser.uid,
-        text: trimmed,
-        ...(hasGuestTranslation
-          ? {
-              guestText: guestTranslated,
-              originalLanguage: 'en',
-              translatedToLanguage: effectiveReplyTargetLang,
-            }
-          : {}),
-        timestamp: serverTimestamp(),
-      });
-
-      // Automatically switch to staff_controlled when an associate replies
-      batch.update(doc(db, sessionPath), {
-        lastUpdatedAt: serverTimestamp(),
-        previewText: hasGuestTranslation ? guestTranslated : trimmed,
-        previewStaffText: trimmed,
-        isUnread: false,
-        status: 'staff_controlled',
-        assignedStaffUid: auth.currentUser.uid,
-        ...(auth.currentUser.email ? { assignedStaffEmail: auth.currentUser.email } : {}),
-        ...(shouldTranslateStaffReply && selectedSession?.guestLanguage !== effectiveReplyTargetLang
-          ? { guestLanguage: effectiveReplyTargetLang }
-          : {}),
-      });
-
-      await batch.commit();
+      const messageId=doc(collection(db,path)).id;
+      const response=await fetch('/api/insights/staff-action',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+await auth.currentUser.getIdToken()},body:JSON.stringify({hotelId,sessionId:selectedSessionId,action:'reply',messageId,text:trimmed,...(hasGuestTranslation?{guestText:guestTranslated,targetLanguage:effectiveReplyTargetLang}: {})})});
+      if(!response.ok)throw new Error('Staff reply could not be confirmed.');
       setReplyText('');
     } catch (err) {
       console.error('Staff reply failed:', err);
@@ -568,20 +540,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     const sessionPath = `hotels/${hotelId}/sessions/${sess.id}`;
     const msgsPath = `hotels/${hotelId}/sessions/${sess.id}/messages`;
     try {
-      await updateDoc(doc(db, sessionPath), {
-        lastUpdatedAt: serverTimestamp(),
-        isUnread: false,
-        status: 'staff_controlled',
-        assignedStaffUid: auth.currentUser.uid,
-        ...(auth.currentUser.email ? { assignedStaffEmail: auth.currentUser.email } : {}),
-      });
-      await addDoc(collection(db, msgsPath), {
-        sender: 'system',
-        ...(sess.guestUid ? { guestUid: sess.guestUid } : {}),
-        staffUid: auth.currentUser.uid,
-        text: 'A hotel associate has taken over this conversation to assist you directly.',
-        timestamp: serverTimestamp(),
-      });
+      const messageId=doc(collection(db,msgsPath)).id;
+      const response=await fetch('/api/insights/staff-action',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+await auth.currentUser.getIdToken()},body:JSON.stringify({hotelId,sessionId:sess.id,action:'takeover',messageId})});
+      if(!response.ok)throw new Error('Takeover could not be confirmed.');
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, sessionPath);
     }
