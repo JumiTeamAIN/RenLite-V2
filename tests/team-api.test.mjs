@@ -116,7 +116,8 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(await vote(guest,feedbackPayload),200);
     assert.equal(await vote(guest,feedbackPayload),409);
     const rated=await insights(owner,owner.uid);
-    assert.deepEqual(rated.data.feedback,{count:1,average:5});
+    assert.deepEqual(rated.data.feedback,{count:0,average:null});
+    assert.deepEqual(rated.data.conversationFeedback,{count:1,average:5});
     assert.deepEqual((await insights(other,other.uid)).data.feedback,{count:0,average:null});
     const assumptions={hotelId:owner.uid,minutes:3,wage:25,cost:99,displacement:60};
     async function settings(a,hotelId,body){
