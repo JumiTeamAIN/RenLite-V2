@@ -75,10 +75,23 @@ service cloud.firestore {
         isValidSlas(data.slas);
     }
 
+    // Absolute guest access window; staff activity cannot extend it.
+    function guestSessionOpen(data) {
+      return data.guestUid == request.auth.uid &&
+        'guestAccessStartedAt' in data && data.guestAccessStartedAt is timestamp &&
+        !('guestEndedAt' in data) &&
+        request.time < data.guestAccessStartedAt + duration.value(24, 'h');
+    }
+    function guestCanAccessSession(hotelId, sessionId) {
+      return guestSessionOpen(get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data);
+    }
+
     function isValidSession(data) {
       return data.keys().hasAll(['guestUid', 'lastUpdatedAt', 'previewText', 'isUnread', 'status']) &&
         data.keys().hasOnly([
           'guestUid',
+          'guestAccessStartedAt',
+          'guestEndedAt',
           'roomNumber',
           'locationId',
           'locationLabel',
@@ -96,6 +109,8 @@ service cloud.firestore {
         ]) &&
         isValidId(data.guestUid) &&
         data.lastUpdatedAt is timestamp &&
+        (!('guestAccessStartedAt' in data) || data.guestAccessStartedAt is timestamp) &&
+        (!('guestEndedAt' in data) || data.guestEndedAt is timestamp) &&
         data.previewText is string && data.previewText.size() <= 5000 &&
         (!('previewStaffText' in data) || (data.previewStaffText is string && data.previewStaffText.size() <= 5000)) &&
         data.isUnread is bool &&
@@ -202,15 +217,16 @@ service cloud.firestore {
         allow get: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(sessionId) &&
-          (existing().guestUid == request.auth.uid || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
+          (guestSessionOpen(existing()) || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
         allow list: if isSignedIn() &&
-          (existing().guestUid == request.auth.uid || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
+          (guestSessionOpen(existing()) || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
         allow create: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(sessionId) &&
           isValidSession(incoming()) &&
           incoming().guestUid == request.auth.uid &&
           incoming().status == 'active' &&
+          incoming().guestAccessStartedAt == request.time && !('guestEndedAt' in incoming()) &&
           incoming().lastUpdatedAt == request.time &&
           exists(/databases/$(database)/documents/hotels/$(hotelId));
         allow update: if isSignedIn() &&
@@ -221,8 +237,9 @@ service cloud.firestore {
           incoming().lastUpdatedAt == request.time &&
           (
             (
-              existing().guestUid == request.auth.uid &&
+              guestSessionOpen(existing()) &&
               (
+                (('guestEndedAt' in incoming()) && incoming().guestEndedAt == request.time && incoming().diff(existing()).affectedKeys().hasOnly(['guestEndedAt','lastUpdatedAt'])) ||
                 (
                   existing().status != 'completed' &&
                   incoming().diff(existing()).affectedKeys().hasOnly([
@@ -304,13 +321,13 @@ service cloud.firestore {
             (
               isHotelStaff(hotelId) ||
               isSandboxAdmin(hotelId) ||
-              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+              guestCanAccessSession(hotelId, sessionId)
             );
           allow list: if isSignedIn() &&
             (
               isHotelStaff(hotelId) ||
               isSandboxAdmin(hotelId) ||
-              existing().guestUid == request.auth.uid
+              (existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, sessionId))
             );
           allow create: if isSignedIn() &&
             isValidId(hotelId) &&
@@ -324,7 +341,7 @@ service cloud.firestore {
                 incoming().sender in ['guest', 'ai', 'system'] &&
                 'guestUid' in incoming() &&
                 incoming().guestUid == request.auth.uid &&
-                get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+                guestCanAccessSession(hotelId, sessionId)
               ) ||
               (
                 incoming().sender in ['staff', 'system'] &&
@@ -353,7 +370,7 @@ service cloud.firestore {
             (
               isHotelStaff(hotelId) ||
               isSandboxAdmin(hotelId) ||
-              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
+              guestCanAccessSession(hotelId, sessionId)
             );
           allow delete: if false;
         }
@@ -363,9 +380,9 @@ service cloud.firestore {
         allow get: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
-          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || existing().guestUid == request.auth.uid);
+          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || (existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId)));
         allow list: if isSignedIn() &&
-          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || existing().guestUid == request.auth.uid);
+          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || (existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId)));
         allow create: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
@@ -379,7 +396,7 @@ service cloud.firestore {
             isSandboxAdmin(hotelId) ||
             (
               (!('guestUid' in incoming()) || incoming().guestUid == request.auth.uid) &&
-              get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)).data.guestUid == request.auth.uid
+              guestCanAccessSession(hotelId, incoming().sessionId)
             )
           );
         allow update: if isSignedIn() &&
@@ -408,20 +425,20 @@ service cloud.firestore {
             (
               existing().status in ['pending', 'acknowledged', 'in_progress', 'escalated'] &&
               existing().roomNumber in ['Pending room #', 'Location needed', ''] &&
-              existing().guestUid == request.auth.uid &&
+              existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId) &&
               incoming().guestUid == existing().guestUid &&
               incoming().diff(existing()).affectedKeys().hasOnly(['roomNumber', 'lastUpdated'])
             ) ||
             (
               existing().status == 'pending' &&
-              existing().guestUid == request.auth.uid &&
+              existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId) &&
               incoming().guestUid == existing().guestUid &&
               incoming().diff(existing()).affectedKeys().hasOnly(['quantity', 'description', 'lastUpdated'])
             ) ||
             (
               existing().status == 'completed' &&
               incoming().status == 'reopened' &&
-              existing().guestUid == request.auth.uid &&
+              existing().guestUid == request.auth.uid && guestCanAccessSession(hotelId, existing().sessionId) &&
               incoming().guestUid == existing().guestUid &&
               incoming().diff(existing()).affectedKeys().hasOnly(['status', 'priority', 'lastUpdated'])
             )
