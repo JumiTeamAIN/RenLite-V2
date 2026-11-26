@@ -9,12 +9,13 @@ const money = (n: number) => n.toLocaleString('en-US',{style:'currency',currency
 export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({hotelId,requests,sessions,ready,error}) => {
   const [days,setDays] = useState(30);
   const [activity,setActivity]=useState<Record<string,number>|null>(null);
+  const [feedback,setFeedback]=useState<{count:number;average:number|null}|null>(null);
   const [activityError,setActivityError]=useState('');
   const [refresh,setRefresh]=useState(0);
   useEffect(()=>{
     const controller=new AbortController();
     let cancelled=false;
-    setActivity(null);setActivityError('');
+    setActivity(null);setFeedback(null);setActivityError('');
     (async()=>{
       try{
         const user=auth.currentUser;
@@ -22,7 +23,7 @@ export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Sess
         const response=await fetch('/api/insights/'+encodeURIComponent(hotelId)+'?days='+days,{headers:{Authorization:'Bearer '+await user.getIdToken()},signal:controller.signal});
         const data=await response.json();
         if(!response.ok)throw new Error(data.error||'Unable to load assistance activity.');
-        if(!cancelled)setActivity(data.counts);
+        if(!cancelled){setActivity(data.counts);setFeedback(data.feedback||null);}
       }catch(e:any){if(!cancelled)setActivityError(e?.message||'Unable to load assistance activity.');}
     })();
     return ()=>{cancelled=true;controller.abort();};
@@ -68,6 +69,7 @@ export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Sess
         {metric('Search unavailable',activity.search_unavailable||0,'No verified local findings')}
         {metric('Failed outcomes',activity.failed||0,'First recorded outcome was unsuccessful')}
       </div>}
+      {feedback && <div className="grid sm:grid-cols-2 gap-3">{metric('Guest response rating',feedback.average===null?'—':feedback.average.toFixed(1)+' / 5','Optional feedback, not overall stay satisfaction')}{metric('Ratings received',feedback.count,'Ratings submitted during selected period')}</div>}
       <p className="text-xs text-slate-500">These counts are not used in ROI yet. Older activity is not backfilled.</p>
     </div>
     <div className="bg-white border rounded-xl p-5 space-y-4"><h2 className="font-semibold text-lg">Estimated return on investment</h2><p className="text-sm text-slate-600">Conservative request-intake model: counts completed AI-created requests only. It excludes fulfillment work and FAQ savings until we can measure them reliably. Assumptions are editable for this session, not actual billing or payroll data.</p>
