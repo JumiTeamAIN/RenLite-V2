@@ -324,6 +324,86 @@ async function startServer() {
     } catch { res.status(500).json({ error: 'Unable to create invitation.' }); }
   });
 
+  // Team directory: only verified administrators of this property may inspect or change it.
+  const teamAdmin = (uid: string, hotelId: string, propertyExists: boolean, member: any) =>
+    propertyExists && (uid === hotelId || (member?.active === true && member?.role === 'admin'));
+
+  app.get('/api/team/directory/:hotelId', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await verifiedStaff(req);
+    if (!user) { res.status(401).json({ error: 'Verified staff sign-in required.' }); return; }
+    const hotelId = req.params.hotelId;
+    if (!validHotelId(hotelId)) { res.status(400).json({ error: 'Invalid hotel.' }); return; }
+    try {
+      const db = teamDb();
+      const hotel = db.collection('hotels').doc(hotelId);
+      const result = await db.runTransaction(async tx => {
+        const [property, caller] = await Promise.all([tx.get(hotel), tx.get(hotel.collection('members').doc(user.uid))]);
+        if (!teamAdmin(user.uid, hotelId, property.exists, caller.data())) return null;
+        const [members, invites] = await Promise.all([
+          tx.get(hotel.collection('members').limit(500)),
+          tx.get(db.collection('teamInvitations').where('hotelId', '==', hotelId))
+        ]);
+        return {
+          members: members.docs.map(d => { const m = d.data(); return { uid: d.id, email: m.email, role: m.role, department: m.department, active: m.active === true }; }),
+          invitations: invites.docs.filter(d => { const i = d.data(); return !i.usedAt && !i.revokedAt && i.expiresAt?.toMillis() > Date.now(); }).map(d => { const i = d.data(); return { id: d.id, email: i.email, role: i.role, department: i.department, expiresAt: i.expiresAt.toDate().toISOString() }; })
+        };
+      });
+      if (!result) { res.status(403).json({ error: 'Hotel administrator access required.' }); return; }
+      res.json(result);
+    } catch { res.status(500).json({ error: 'Unable to load team directory.' }); }
+  });
+
+  app.post('/api/team/member', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await verifiedStaff(req);
+    if (!user) { res.status(401).json({ error: 'Verified staff sign-in required.' }); return; }
+    if (isRateLimited(user.uid)) { res.status(429).json({ error: 'Try again later.' }); return; }
+    const { hotelId, uid, role, active } = req.body || {};
+    if (!validHotelId(hotelId) || !validHotelId(uid) || uid === user.uid || uid === hotelId ||
+        !['manager','associate'].includes(role) || typeof active !== 'boolean') {
+      res.status(400).json({ error: 'Invalid team change. Owners and your own account cannot be modified here.' }); return;
+    }
+    try {
+      const db = teamDb();
+      const hotel = db.collection('hotels').doc(hotelId);
+      const target = hotel.collection('members').doc(uid);
+      const ok = await db.runTransaction(async tx => {
+        const [property, caller, member] = await Promise.all([tx.get(hotel), tx.get(hotel.collection('members').doc(user.uid)), tx.get(target)]);
+        if (!teamAdmin(user.uid, hotelId, property.exists, caller.data()) || !member.exists || !['manager','associate'].includes(member.data()?.role)) return false;
+        tx.update(target, { role, active, updatedAt: FieldValue.serverTimestamp(), updatedBy: user.uid });
+        const index = db.collection('staffUsers').doc(uid).collection('hotels').doc(hotelId);
+        if (active) tx.set(index, { hotelId }); else tx.delete(index);
+        return true;
+      });
+      if (!ok) { res.status(403).json({ error: 'Not authorized to change this member.' }); return; }
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: 'Unable to update member.' }); }
+  });
+
+  app.post('/api/team/revoke', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await verifiedStaff(req);
+    if (!user) { res.status(401).json({ error: 'Verified staff sign-in required.' }); return; }
+    if (isRateLimited(user.uid)) { res.status(429).json({ error: 'Try again later.' }); return; }
+    const { hotelId, id } = req.body || {};
+    if (!validHotelId(hotelId) || typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) { res.status(400).json({ error: 'Invalid invitation.' }); return; }
+    try {
+      const db = teamDb();
+      const hotel = db.collection('hotels').doc(hotelId);
+      const invite = db.collection('teamInvitations').doc(id);
+      const ok = await db.runTransaction(async tx => {
+        const [property, caller, snapshot] = await Promise.all([tx.get(hotel), tx.get(hotel.collection('members').doc(user.uid)), tx.get(invite)]);
+        const data = snapshot.data();
+        if (!teamAdmin(user.uid, hotelId, property.exists, caller.data()) || !data || data.hotelId !== hotelId || data.usedAt || data.revokedAt) return false;
+        tx.update(invite, { revokedAt: FieldValue.serverTimestamp(), revokedBy: user.uid });
+        return true;
+      });
+      if (!ok) { res.status(403).json({ error: 'Invitation unavailable or not authorized.' }); return; }
+      res.json({ ok: true });
+    } catch { res.status(500).json({ error: 'Unable to revoke invitation.' }); }
+  });
+
   app.post('/api/team/accept', async (req, res) => {
     res.set('Cache-Control', 'no-store');
     const user = await verifiedStaff(req);
