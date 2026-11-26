@@ -20,7 +20,10 @@
     "qrcode": "^1.5.4",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "mammoth": "^1.10.0",
+    "exceljs": "^4.4.0",
+    "pdfjs-dist": "^5.4.149"
   },
   "devDependencies": {
     "@firebase/eslint-plugin-security-rules": "^0.0.2",
