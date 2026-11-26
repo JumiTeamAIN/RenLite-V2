@@ -953,7 +953,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden min-w-0">
-        {canConfigure && activeTab === 'insights' && <Insights key={hotelId} hotelId={hotelId} requests={requests} sessions={sessions} ready={sessionsReady && requestsReady} error={sessionsError || requestsError} />}
+        {canConfigure && activeTab === 'insights' && <Insights key={hotelId} hotelId={hotelId} targets={hotelConfig?.slas || null} requests={requests} sessions={sessions} ready={sessionsReady && requestsReady} error={sessionsError || requestsError} />}
         {canManageTeam && activeTab === 'team' && <TeamManagement key={hotelId} hotelId={hotelId} />}
         {/* TAB 1: LIVE INBOX */}
         {activeTab === 'inbox' && (
