@@ -100,6 +100,23 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     const rated=await insights(owner,owner.uid);
     assert.deepEqual(rated.data.feedback,{count:1,average:5});
     assert.deepEqual((await insights(other,other.uid)).data.feedback,{count:0,average:null});
+    const assumptions={hotelId:owner.uid,minutes:3,wage:25,cost:99,displacement:60};
+    async function settings(a,hotelId,body){
+      const r=await fetch(base+'/api/insights/settings'+(body?'':'/'+hotelId),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+      return {status:r.status,data:await r.json()};
+    }
+    assert.equal((await settings(other,owner.uid,assumptions)).status,403);
+    assert.equal((await settings(agent,owner.uid)).status,403);
+    assert.equal((await settings(owner,owner.uid,{...assumptions,displacement:101})).status,400);
+    assert.equal((await settings(owner,owner.uid,assumptions)).status,200);
+    assert.deepEqual((await settings(owner,owner.uid)).data.settings,{minutes:3,wage:25,cost:99,displacement:60});
+    assert.equal((await settings(other,other.uid)).data.settings,null);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:true})).status,200);
+    assert.equal((await settings(agent,owner.uid)).status,200);
+    assert.equal((await settings(agent,owner.uid,{...assumptions,cost:129})).status,200);
+    assert.equal((await settings(owner,owner.uid)).data.settings.cost,129);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
+    assert.equal((await settings(agent,owner.uid,assumptions)).status,403);
     const pending=await call(owner,'invitations',{...payload,email:other.email});
     assert.equal(pending.status,201);
     const id=createHash('sha256').update(pending.data.token).digest('hex');
