@@ -74,3 +74,26 @@ test('attempt allowance rejects exhausted budgets and disabled search',()=>{
  assert.equal(estimateTokenDollars({model:'unknown'}),null);
  assert.ok(Math.abs(estimateTokenDollars({model:'gemini-3.5-flash-lite',inputTokens:1000000,outputTokens:1000000,thinkingTokens:1000000})!-5.3)<1e-9);
 });
+
+import {parseUploadedFaqs} from '../services/faqImport.ts';
+test('FAQ imports reject unsupported and binary files',()=>{
+ assert.throws(()=>parseUploadedFaqs('Q: Parking?\nA: $15','FAQ.docx'));
+ assert.throws(()=>parseUploadedFaqs('PK\u0003\u0004bad','FAQ.txt'));
+ assert.throws(()=>parseUploadedFaqs('bad\ufffd|answer','FAQ.csv'));
+ assert.deepEqual(parseUploadedFaqs('[{"question":"How much is parking?","answer":"$15 plus tax"}]','FAQ.JSON'),[{question:'How much is parking?',answer:'$15 plus tax'}]);
+ assert.deepEqual(parseUploadedFaqs('question,answer\nPool?,Sunup to Sundown','FAQ.csv'),[{question:'Pool?',answer:'Sunup to Sundown'}]);
+ assert.deepEqual(parseUploadedFaqs('Q: Breakfast?\nA: $25 plus tax and gratuity','FAQ.txt'),[{question:'Breakfast?',answer:'$25 plus tax and gratuity'}]);
+});
+
+import {structuredTextFaqs,reviewFaqs,extractFaqFile} from '../services/documentFaq.ts';
+test('structured document questions preserve exact answers and skip duplicate or conflicting questions',()=>{
+ const pairs=structuredTextFaqs('FAQ’s\nHow much is parking?\n$15 plus tax\nHow much is breakfast?\n$25 plus tax and gratuity\nWhat are the hours for the pool?\nSunup to Sundown');
+ assert.equal(pairs.length,3);assert.equal(pairs[2].answer,'Sunup to Sundown');
+ const review=reviewFaqs([pairs[0]], [...pairs,{question:'HOW MUCH IS PARKING',answer:'Free'}]);
+ assert.equal(review.accepted.length,2);assert.equal(review.duplicates,1);assert.equal(review.conflicts,1);
+});
+test('Excel FAQ extraction reads question and answer columns',async()=>{
+ const excel=await import('exceljs');const Workbook=excel.Workbook||excel.default?.Workbook;const wb=new Workbook();const sheet=wb.addWorksheet('FAQs');sheet.addRow(['Question','Answer']);sheet.addRow(['Parking?','$15 plus tax']);const bytes=await wb.xlsx.writeBuffer();
+ const pairs=await extractFaqFile(new File([new Uint8Array(bytes)],'FAQ.xlsx'));
+ assert.deepEqual(pairs,[{question:'Parking?',answer:'$15 plus tax'}]);
+});
