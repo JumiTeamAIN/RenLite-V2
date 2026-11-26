@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { sendEmailVerification } from 'firebase/auth';
 import {
   signInUser,
   resetPassword,
@@ -118,7 +119,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
       const cred = await signInUser(email, password);
       if (!cred.user.emailVerified) {
-        setError('Verify your work email before accessing a hotel.');
+        try {
+          await sendEmailVerification(cred.user);
+          setError('Verification email sent. Verify your work email, then sign in again.');
+        } catch {
+          setError('Verify your work email before accessing a hotel. Unable to send another verification email right now.');
+        }
         setLoading(false);
         return;
       }
