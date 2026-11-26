@@ -450,6 +450,34 @@ async function startServer() {
     } catch { res.status(500).json({ error: 'Unable to accept invitation.' }); }
   });
 
+  // Feedback is one immutable vote per guest-owned, backend-recorded turn.
+  app.post('/api/insights/feedback', async (req,res) => {
+    res.set('Cache-Control','no-store');
+    let uid:string;
+    try { const header=req.headers.authorization||''; if(!header.startsWith('Bearer '))throw new Error(); uid=(await adminAuth.verifyIdToken(header.slice(7))).uid; }
+    catch {res.status(401).json({error:'Authentication required.'});return;}
+    if(isRateLimited(uid)){res.status(429).json({error:'Try again later.'});return;}
+    const {hotelId,sessionId,guestMessageId,rating}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)||!Number.isInteger(rating)||rating<1||rating>5){res.status(400).json({error:'Invalid feedback.'});return;}
+    try{
+      const hotel=teamDb().collection('hotels').doc(hotelId);
+      const session=hotel.collection('sessions').doc(sessionId);
+      const id=createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex');
+      const event=hotel.collection('assistanceEvents').doc(id);
+      const feedback=hotel.collection('assistanceFeedback').doc(id);
+      const result=await teamDb().runTransaction(async tx=>{
+        const [s,e,reply,f]=await Promise.all([tx.get(session),tx.get(event),tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(feedback)]);
+        if(!s.exists||s.data()?.guestUid!==uid||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested'].includes(e.data()?.kind))return 'denied';
+        if(f.exists)return 'duplicate';
+        tx.create(feedback,{rating,createdAt:FieldValue.serverTimestamp(),version:1});
+        return 'saved';
+      });
+      if(result==='denied'){res.status(403).json({error:'Feedback unavailable for this response.'});return;}
+      if(result==='duplicate'){res.status(409).json({error:'Feedback already received.'});return;}
+      res.json({ok:true});
+    }catch{res.status(500).json({error:'Unable to save feedback.'});}
+  });
+
   // Aggregate only; raw event documents are server-only under the default deny rules.
   app.get('/api/insights/:hotelId', async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -473,7 +501,10 @@ async function startServer() {
       const snapshot=await base.limit(10001).get();
       if(snapshot.size>10000){res.status(422).json({error:'Too much activity for this reporting period; select a shorter period.'});return;}
       for(const event of snapshot.docs){const k=event.data().kind;if(kinds.includes(k))counts[k]++;}
-      res.json({counts,from:from.toDate().toISOString(),to:to.toDate().toISOString()});
+      const votes=await hotel.collection('assistanceFeedback').where('createdAt','>=',from).where('createdAt','<=',to).limit(10001).get();
+      if(votes.size>10000){res.status(422).json({error:'Select a shorter reporting period.'});return;}
+      const ratings=votes.docs.map(d=>d.data().rating).filter(n=>Number.isInteger(n)&&n>=1&&n<=5);
+      res.json({counts,feedback:{count:ratings.length,average:ratings.length?ratings.reduce((a,b)=>a+b,0)/ratings.length:null},from:from.toDate().toISOString(),to:to.toDate().toISOString()});
     } catch { res.status(500).json({error:'Unable to load assistance activity.'}); }
   });
 
