@@ -39,3 +39,13 @@ test('response targets distinguish late, overdue, missing evidence and excluded 
  assert.deepEqual(r,{met:1,late:1,overdue:1,pending:1,unknown:1,excluded:2,rate:100/3});
  assert.equal(responseCompliance([base],null,1200000).rate,null);
 });
+
+import { directFaqAnswer } from '../services/directFaq.ts';
+test('exact configured FAQ bypass only for unambiguous informational questions',()=>{
+ const f=[{question:'What time is breakfast?',answer:'6:30 AM to 10 AM.'}];
+ assert.equal(directFaqAnswer('WHAT time is breakfast!',f),'6:30 AM to 10 AM.');
+ assert.equal(directFaqAnswer('What time is breakfast? I need towels',f),null);
+ assert.equal(directFaqAnswer('What time is breakfast?', [...f,...f]),null);
+ assert.equal(directFaqAnswer('Where is the fire exit?',[{question:'Where is the fire exit?',answer:'Lobby'}]),null);
+ assert.equal(directFaqAnswer('¿A qué hora es el desayuno?',f),null);
+});
