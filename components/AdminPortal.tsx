@@ -13,7 +13,7 @@ import {
   addDoc,
   serverTimestamp,
 } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db, OperationType, handleFirestoreError } from '../services/firebase';
 import {
   translateText,
@@ -163,6 +163,15 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const translatedAttemptedRef = useRef<Set<string>>(new Set());
   const [hotelConfig, setHotelConfig] = useState<HotelConfig | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [staffIdentity, setStaffIdentity] = useState('');
+  const [signOutError, setSignOutError] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
+  const handleSignOut = async () => {
+    setSigningOut(true); setSignOutError('');
+    try { await signOut(auth); window.location.hash = '#/login'; }
+    catch { setSignOutError('Unable to sign out. Please try again.'); }
+    finally { setSigningOut(false); }
+  };
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [staffRole, setStaffRole] = useState<'admin' | 'manager' | 'associate' | 'legacy' | null>(null);
 
@@ -235,6 +244,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       setIsAuthReady(false);
       setIsAuthenticated(false);
       setStaffRole(null);
+      setStaffIdentity(user?.displayName || user?.email || '');
       setSessions([]);
       setRequests([]);
       setChatMessages([]);
@@ -254,6 +264,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       if (user.uid === hotelId) { grant('admin'); return; }
       // Preserve the existing verified sandbox operator only; never grant a new global role.
       if (hotelId === 'test-hotel-001' && user.emailVerified && user.email === 'jumi@teamain.org') { grant('legacy'); return; }
+      if (!user.emailVerified) { grant(null); return; }
       const current = generation;
       unsubscribeMember = onSnapshot(doc(db, 'hotels', hotelId, 'members', user.uid), snap => {
         if (current !== generation) return;
@@ -848,7 +859,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     'Food & Beverage',
   ];
 
-  if (!isAuthReady || !isAuthenticated) return <div className="p-6 text-slate-700">{!isAuthReady ? 'Checking hotel access…' : 'Sign in with an authorized hotel account to continue.'}{isAuthReady && <a href="#/login" className="block text-indigo-600 mt-2">Go to login</a>}</div>;
+  if (!isAuthReady || !isAuthenticated) return <main className="h-full min-h-[240px] flex items-center justify-center bg-slate-50 p-6"><div className="max-w-md bg-white border rounded-xl p-6 text-slate-700"><h1 className="text-xl font-bold">{!isAuthReady ? 'Checking hotel access…' : 'Access denied'}</h1>{isAuthReady && <><p className="mt-2">Sign in with an authorized hotel account to continue.</p><a href="#/login" className="block text-indigo-600 mt-4">Go to login / choose hotel</a><a href="#/" className="block text-indigo-600 mt-2">Home</a>{auth.currentUser && <button disabled={signingOut} onClick={handleSignOut} className="mt-4 text-indigo-600 underline">Sign out</button>}{signOutError && <p role="alert">{signOutError}</p>}</>}</div></main>;
 
   return (
     <div className="flex h-full bg-slate-50 font-sans text-slate-900">
@@ -920,6 +931,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
           </>}
           {canManageTeam && <button type="button" onClick={()=>setActiveTab('team')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='team'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Team Management</button>}
         </nav>
+        <div className="p-4 border-t border-slate-800 text-xs space-y-2">
+          <p className="truncate" title={staffIdentity}>{staffIdentity || 'Signed-in staff'}</p>
+          <p className="text-slate-400">{staffRole === 'legacy' ? 'Sandbox operator' : staffRole === 'admin' ? 'Hotel administrator' : staffRole === 'manager' ? 'Manager' : 'Associate'}</p>
+          <a href="#/" className="block text-slate-300 hover:text-white">Home</a>
+          <button type="button" disabled={signingOut} onClick={handleSignOut} className="w-full text-left text-slate-200 hover:text-white">{signingOut ? 'Signing out…' : 'Sign out'}</button>
+          {signOutError && <p role="alert" className="text-red-300">{signOutError}</p>}
+        </div>
       </aside>
 
       {/* Main Content */}
