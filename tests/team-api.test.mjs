@@ -84,7 +84,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     const guest=await account('feedbackguest');
     const sessionId='feedback-session', guestMessageId='feedback-turn';
     const session=db.collection('hotels').doc(owner.uid).collection('sessions').doc(sessionId);
-    await session.set({guestUid:guest.uid,status:'active'});
+    await session.set({guestUid:guest.uid,status:'active',guestAccessStartedAt:Timestamp.now()});
     const msgs=session.collection('messages'), now=Date.now();
     await msgs.doc('prior-question').set({sender:'guest',guestUid:guest.uid,text:'When does breakfast start?',timestamp:Timestamp.fromMillis(now-3000)});
     await msgs.doc('ai-prior-question').set({sender:'ai',guestUid:guest.uid,text:'Breakfast starts at seven.',timestamp:Timestamp.fromMillis(now-2000)});
