@@ -145,13 +145,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   useEffect(()=>{
     if(!sessionId||ended)return;
     const touch=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at<1800000)rememberSession(sessionId);}catch{}};
-    const idle=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at>=1800000){setResumeId(sessionId);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');}}catch{}};
+    const idle=()=>{if(session?.guestAccessStartedAt && Date.now()-session.guestAccessStartedAt.toMillis()>=86400000){forgetSession();setEnded(true);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');return;}try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at>=1800000){setResumeId(sessionId);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');}}catch{}};
     const timer=setInterval(idle,15000);
     window.addEventListener('pointerdown',touch);
     window.addEventListener('keydown',touch);
     document.addEventListener('visibilitychange',idle);
     return()=>{clearInterval(timer);window.removeEventListener('pointerdown',touch);window.removeEventListener('keydown',touch);document.removeEventListener('visibilitychange',idle);};
-  },[sessionId,storageKey,ended]);
+  },[sessionId,storageKey,ended,session?.guestAccessStartedAt]);
 
   // 1. Initialize Auth, Hotel Config, and Session
   useEffect(() => {
@@ -233,6 +233,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         if (cancelled) return;
         const sessionRef = await addDoc(collection(db, sessionsPath), {
           guestUid: user.uid,
+          guestAccessStartedAt: serverTimestamp(),
           lastUpdatedAt: serverTimestamp(),
           previewText: 'Started conversation',
           isUnread: false,
@@ -328,7 +329,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   useEffect(() => {
     if (!sessionId || !guestUid) return;
     const requestsPath = `hotels/${hotelId}/requests`;
-    const q = query(collection(db, requestsPath), where('guestUid', '==', guestUid));
+    const q = query(collection(db, requestsPath), where('guestUid', '==', guestUid), where('sessionId','==',sessionId));
 
     return onSnapshot(
       q,
@@ -452,6 +453,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     try {
       const sessionRef = await addDoc(collection(db, sessionsPath), {
         guestUid,
+        guestAccessStartedAt: serverTimestamp(),
         lastUpdatedAt: serverTimestamp(),
         previewText: 'Started conversation',
         isUnread: false,
@@ -646,7 +648,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   if (ended || resumeId) {
     return <main className="flex items-center justify-center h-full bg-slate-50 p-6"><div className="max-w-sm bg-white border rounded-2xl p-6 space-y-4 text-center">
       <h1 className="font-semibold text-lg">{ended?'Chat ended':'Conversation paused'}</h1>
-      <p className="text-sm text-slate-600">{ended?'Your conversation is hidden on this device. Outstanding service requests remain with the hotel team.':'For privacy, your previous conversation is hidden after inactivity. Resume only if this is your conversation.'}</p>
+      <p className="text-sm text-slate-600">{ended?'This conversation is no longer available to you. Outstanding service requests remain with the hotel team.':'For privacy, your previous conversation is hidden after inactivity. Resume only if this is your conversation.'}</p>
       {!ended&&<button className="w-full bg-indigo-600 text-white rounded-lg p-3" onClick={()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===resumeId&&Date.now()-v.at<86400000)rememberSession(resumeId!);else forgetSession();}catch{forgetSession();}window.location.reload();}}>Resume my conversation</button>}
       <button className="w-full border rounded-lg p-3" onClick={()=>{forgetSession();window.location.reload();}}>Start a new chat</button>
     </div></main>;
@@ -727,7 +729,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           </button>
         </div>
 
-        <div className="flex justify-end mt-1"><button type="button" disabled={isSending||isThinking||quickSubmitting} onClick={()=>{if(!window.confirm('End this chat? Outstanding requests will remain with the hotel team.'))return;forgetSession();setEnded(true);setResumeId(null);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');setPendingGuestMessages([]);}} className="text-xs text-slate-600 underline disabled:opacity-50">End Chat</button></div>
+        <div className="flex justify-end mt-1"><button type="button" disabled={isSending||isThinking||quickSubmitting} onClick={async()=>{if(!window.confirm('End this chat? Outstanding requests will remain with the hotel team.'))return;try{await updateDoc(doc(db,'hotels',hotelId,'sessions',sessionId),{guestEndedAt:serverTimestamp(),lastUpdatedAt:serverTimestamp()});}catch{setChatError('Could not confirm that this conversation ended. Please reconnect and try again.');return;}forgetSession();setEnded(true);setResumeId(null);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');setPendingGuestMessages([]);}} className="text-xs text-slate-600 underline disabled:opacity-50">End Chat</button></div>
 
         {/* Inline Location Selector */}
         {showLocationEditor && (
