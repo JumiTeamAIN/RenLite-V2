@@ -139,14 +139,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const forgetSession = () => {
     try { sessionStorage.removeItem(storageKey); localStorage.removeItem('ren_session_'+hotelId); } catch {}
   };
-  const [resumeChoice,setResumeChoice]=useState<'pending'|'resume'|'fresh'>('pending');
   const [resumeId,setResumeId]=useState<string|null>(null);
   const [ended,setEnded]=useState(false);
   // Only guest interaction extends the local idle window; staff replies do not.
   useEffect(()=>{
     if(!sessionId||ended)return;
-    const touch=()=>rememberSession(sessionId);
-    const idle=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at>=1800000){setResumeId(sessionId);setResumeChoice('pending');setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');}}catch{}};
+    const touch=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at<1800000)rememberSession(sessionId);}catch{}};
+    const idle=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at>=1800000){setResumeId(sessionId);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');}}catch{}};
     const timer=setInterval(idle,15000);
     window.addEventListener('pointerdown',touch);
     window.addEventListener('keydown',touch);
@@ -215,8 +214,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');
         if(typeof v?.id==='string'&&Number.isFinite(v.at)){storedSession=v.id;age=Date.now()-v.at;}
       }catch{}
-      if(storedSession&&age>=0&&age<86400000&&resumeChoice!=='fresh'){
-        if(age>=1800000&&resumeChoice==='pending'){if(!cancelled)setResumeId(storedSession);return;}
+      if(storedSession&&age>=0&&age<86400000){
+        if(age>=1800000){if(!cancelled)setResumeId(storedSession);return;}
         try{
           const snap=await getDoc(doc(db,'hotels',hotelId,'sessions',storedSession));
           if(snap.exists()&&snap.data()?.guestUid===user.uid&&(!initialRoom||snap.data()?.roomNumber===initialRoom)){
@@ -261,7 +260,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     return () => {
       cancelled = true;
     };
-  }, [hotelId,locationCode,resumeChoice]);
+  }, [hotelId,locationCode]);
 
   // 2. Listen to Session Document (for real-time Human Takeover & Location status)
   useEffect(() => {
@@ -644,6 +643,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     }
   };
 
+  if (ended || resumeId) {
+    return <main className="flex items-center justify-center h-full bg-slate-50 p-6"><div className="max-w-sm bg-white border rounded-2xl p-6 space-y-4 text-center">
+      <h1 className="font-semibold text-lg">{ended?'Chat ended':'Conversation paused'}</h1>
+      <p className="text-sm text-slate-600">{ended?'Your conversation is hidden on this device. Outstanding service requests remain with the hotel team.':'For privacy, your previous conversation is hidden after inactivity. Resume only if this is your conversation.'}</p>
+      {!ended&&<button className="w-full bg-indigo-600 text-white rounded-lg p-3" onClick={()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===resumeId&&Date.now()-v.at<86400000)rememberSession(resumeId!);else forgetSession();}catch{forgetSession();}window.location.reload();}}>Resume my conversation</button>}
+      <button className="w-full border rounded-lg p-3" onClick={()=>{forgetSession();window.location.reload();}}>Start a new chat</button>
+    </div></main>;
+  }
+
   if (initError) {
     return (
       <div className="flex items-center justify-center h-full bg-slate-50 p-6 text-center">
@@ -718,6 +726,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                 : 'Speak with Staff'}
           </button>
         </div>
+
+        <div className="flex justify-end mt-1"><button type="button" disabled={isSending||isThinking||quickSubmitting} onClick={()=>{if(!window.confirm('End this chat? Outstanding requests will remain with the hotel team.'))return;forgetSession();setEnded(true);setResumeId(null);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');setPendingGuestMessages([]);}} className="text-xs text-slate-600 underline disabled:opacity-50">End Chat</button></div>
 
         {/* Inline Location Selector */}
         {showLocationEditor && (
