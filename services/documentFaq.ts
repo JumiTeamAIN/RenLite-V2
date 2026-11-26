@@ -34,12 +34,14 @@ export async function extractFaqFile(file:File):Promise<FaqDraft[]>{
  const bytes=await file.arrayBuffer();
  if(ext==='docx'){
    const mammoth=await import('mammoth');
-   const doc=await mammoth.extractRawText({arrayBuffer:bytes});
+   const extract=mammoth.extractRawText||mammoth.default?.extractRawText;
+   const doc=await extract({arrayBuffer:bytes,...(typeof Buffer!=='undefined'&&typeof window==='undefined'?{buffer:Buffer.from(bytes)}:{})});
    return structuredTextFaqs(doc.value);
  }
  if(ext==='xlsx'){
    const excel=await import('exceljs');
-   const workbook=new excel.Workbook();await workbook.xlsx.load(bytes);
+   const Workbook=excel.Workbook||excel.default?.Workbook;
+   const workbook=new Workbook();await workbook.xlsx.load(bytes);
    const pairs:FaqDraft[]=[];
    workbook.eachSheet(sheet=>{
      if(sheet.rowCount>1000||sheet.columnCount>50)throw Error('Workbook exceeds 1000 rows or 50 columns per sheet.');
