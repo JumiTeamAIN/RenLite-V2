@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onIdTokenChanged } from 'firebase/auth';
 import { ChatWindow } from './ChatWindow';
 import { AdminPortal } from './AdminPortal';
 import { auth, db, OperationType, handleFirestoreError } from '../services/firebase';
@@ -10,13 +10,25 @@ interface SimulatorProps {
   initialLocationCode?: string;
 }
 
-export const Simulator: React.FC<SimulatorProps> = ({ hotelId, initialLocationCode }) => {
+export const Simulator: React.FC<SimulatorProps> = (props) => {
+  const [access, setAccess] = useState<'loading' | 'allowed' | 'denied'>('loading');
+  useEffect(() => onIdTokenChanged(auth, user => {
+    setAccess(user && !user.isAnonymous && user.emailVerified &&
+      user.email === 'jumi@teamain.org' ? 'allowed' : 'denied');
+  }), []);
+  if (access !== 'allowed' || props.hotelId !== 'test-hotel-001') {
+    return <main className="min-h-screen flex items-center justify-center bg-slate-50 p-6"><div className="max-w-md bg-white border rounded-xl p-6"><h1 className="text-xl font-bold">{access === 'loading' ? 'Checking developer access…' : 'Access denied'}</h1><p className="mt-2">The simulator is reserved for the authorized sandbox operator.</p><a className="block mt-4 text-indigo-600" href="#/login">Go to login</a><a className="block mt-2 text-indigo-600" href="#/">Home</a></div></main>;
+  }
+  return <AuthorizedSimulator {...props} />;
+};
+
+const AuthorizedSimulator: React.FC<SimulatorProps> = ({ hotelId, initialLocationCode }) => {
   const [simLocationCode, setSimLocationCode] = useState<string | undefined>(initialLocationCode);
 
   // Ensure Test Hotel Exists (Self-Correction for Dev Mode)
   useEffect(() => {
-    return onAuthStateChanged(auth, async (user) => {
-      if (!user) return;
+    return onIdTokenChanged(auth, async (user) => {
+      if (!user || user.isAnonymous || !user.emailVerified || user.email !== 'jumi@teamain.org' || hotelId !== 'test-hotel-001') return;
       const path = `hotels/${hotelId}`;
       try {
         const ref = doc(db, 'hotels', hotelId);

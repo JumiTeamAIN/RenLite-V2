@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { sendEmailVerification } from 'firebase/auth';
 import {
   signInUser,
   resetPassword,
@@ -16,6 +17,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   oobCode,
 }) => {
   const [mode, setMode] = useState<'login' | 'forgot' | 'confirm-reset'>(initialMode);
+  const [hotels, setHotels] = useState<{hotelId: string; name: string; role: string}[]>([]);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -116,7 +118,34 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       }
 
       const cred = await signInUser(email, password);
-      window.location.hash = `#/admin/${cred.user.uid}`;
+      if (!cred.user.emailVerified) {
+        try {
+          await sendEmailVerification(cred.user);
+          setError('Verification email sent. Verify your work email, then sign in again.');
+        } catch {
+          setError('Verify your work email before accessing a hotel. Unable to send another verification email right now.');
+        }
+        setLoading(false);
+        return;
+      }
+      const response = await fetch('/api/team/hotels', { headers: { Authorization: 'Bearer ' + await cred.user.getIdToken() } });
+      if (!response.ok) {
+        setError('Unable to load your hotel access. Please try again.');
+        setLoading(false);
+        return;
+      }
+      const data = await response.json();
+      if (!Array.isArray(data.hotels) || !data.hotels.length) {
+        setError('No active hotel access. Ask your hotel administrator for an invitation.');
+        setLoading(false);
+        return;
+      }
+      if (data.hotels.length === 1) {
+        window.location.hash = '#/admin/' + data.hotels[0].hotelId;
+      } else {
+        setHotels(data.hotels);
+        setLoading(false);
+      }
     } catch (err: any) {
       console.error(err);
       if (err?.code === 'auth/operation-not-allowed') {
@@ -200,6 +229,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       setLoading(false);
     }
   };
+
+  if (hotels.length > 1) return (
+    <main className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow p-6 w-full max-w-md space-y-4">
+        <h1 className="text-xl font-bold">Choose your hotel</h1>
+        {hotels.map(h => <button key={h.hotelId} className="block w-full text-left border rounded-lg p-3" onClick={() => { window.location.hash = '#/admin/' + h.hotelId; }}>{h.name} · {h.role}</button>)}
+      </div>
+    </main>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">

@@ -28,13 +28,29 @@ service cloud.firestore {
         request.auth.token.email_verified == true;
     }
 
-    function isAdmin() {
-      return isVerifiedAdminEmail() ||
-        (isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    // Legacy simulator operator is scoped to the sandbox, never customer hotels.
+    function isSandboxAdmin(hotelId) {
+      return hotelId == 'test-hotel-001' && isVerifiedAdminEmail();
     }
 
     function isHotelOwner(hotelId) {
-      return isSignedIn() && request.auth.uid == hotelId;
+      return isSignedIn() && request.auth.uid == hotelId && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    // Existing hotel IDs remain stable. Memberships are provisioned only by a trusted backend.
+    function hasHotelRole(hotelId, roles) {
+      return isSignedIn() && request.auth.token.email_verified == true &&
+        exists(/databases/$(database)/documents/hotels/$(hotelId)/members/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/hotels/$(hotelId)/members/$(request.auth.uid)).data.active == true &&
+        get(/databases/$(database)/documents/hotels/$(hotelId)/members/$(request.auth.uid)).data.role in roles;
+    }
+
+    function isHotelStaff(hotelId) {
+      return isHotelOwner(hotelId) || hasHotelRole(hotelId, ['admin', 'manager', 'associate']);
+    }
+
+    function canConfigureHotel(hotelId) {
+      return isHotelOwner(hotelId) || hasHotelRole(hotelId, ['admin', 'manager']);
     }
 
     function isValidSlas(slas) {
@@ -165,22 +181,30 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         isValidId(hotelId) &&
         isValidHotel(incoming(), hotelId) &&
-        (isHotelOwner(hotelId) || isAdmin());
+        (isHotelOwner(hotelId) || isSandboxAdmin(hotelId));
       allow update: if isSignedIn() &&
         isValidId(hotelId) &&
         isValidHotel(incoming(), hotelId) &&
-        (isHotelOwner(hotelId) || isAdmin()) &&
+        (canConfigureHotel(hotelId) || isSandboxAdmin(hotelId)) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'persona', 'faqs', 'slas', 'locations', 'emergencyPhone']) &&
         (!('id' in existing()) || incoming().id == existing().id);
       allow delete: if false;
+
+      match /members/{memberUid} {
+        allow get: if isSignedIn() &&
+          (request.auth.uid == memberUid || isHotelOwner(hotelId) || hasHotelRole(hotelId, ['admin']));
+        allow list: if isHotelOwner(hotelId) || hasHotelRole(hotelId, ['admin']);
+        // Clients cannot grant themselves membership or elevate privileges.
+        allow create, update, delete: if false;
+      }
 
       match /sessions/{sessionId} {
         allow get: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(sessionId) &&
-          (existing().guestUid == request.auth.uid || isHotelOwner(hotelId) || isAdmin());
+          (existing().guestUid == request.auth.uid || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
         allow list: if isSignedIn() &&
-          (existing().guestUid == request.auth.uid || hotelId == request.auth.uid || isVerifiedAdminEmail());
+          (existing().guestUid == request.auth.uid || isHotelStaff(hotelId) || isSandboxAdmin(hotelId));
         allow create: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(sessionId) &&
@@ -251,7 +275,7 @@ service cloud.firestore {
               )
             ) ||
             (
-              (isHotelOwner(hotelId) || isAdmin()) &&
+              (isHotelStaff(hotelId) || isSandboxAdmin(hotelId)) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'lastUpdatedAt',
                 'previewText',
@@ -278,14 +302,14 @@ service cloud.firestore {
             isValidId(sessionId) &&
             isValidId(messageId) &&
             (
-              isHotelOwner(hotelId) ||
-              isAdmin() ||
+              isHotelStaff(hotelId) ||
+              isSandboxAdmin(hotelId) ||
               get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
             );
           allow list: if isSignedIn() &&
             (
-              hotelId == request.auth.uid ||
-              isVerifiedAdminEmail() ||
+              isHotelStaff(hotelId) ||
+              isSandboxAdmin(hotelId) ||
               existing().guestUid == request.auth.uid
             );
           allow create: if isSignedIn() &&
@@ -304,7 +328,7 @@ service cloud.firestore {
               ) ||
               (
                 incoming().sender in ['staff', 'system'] &&
-                (isHotelOwner(hotelId) || isAdmin()) &&
+                (isHotelStaff(hotelId) || isSandboxAdmin(hotelId)) &&
                 (
                   !('guestUid' in incoming()) ||
                   incoming().guestUid == get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid
@@ -327,8 +351,8 @@ service cloud.firestore {
               'translatedToLanguage'
             ]) &&
             (
-              isHotelOwner(hotelId) ||
-              isAdmin() ||
+              isHotelStaff(hotelId) ||
+              isSandboxAdmin(hotelId) ||
               get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(sessionId)).data.guestUid == request.auth.uid
             );
           allow delete: if false;
@@ -339,9 +363,9 @@ service cloud.firestore {
         allow get: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
-          (isHotelOwner(hotelId) || isAdmin() || existing().guestUid == request.auth.uid);
+          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || existing().guestUid == request.auth.uid);
         allow list: if isSignedIn() &&
-          (hotelId == request.auth.uid || isVerifiedAdminEmail() || existing().guestUid == request.auth.uid);
+          (isHotelStaff(hotelId) || isSandboxAdmin(hotelId) || existing().guestUid == request.auth.uid);
         allow create: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
@@ -351,8 +375,8 @@ service cloud.firestore {
           incoming().lastUpdated == request.time &&
           exists(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)) &&
           (
-            isHotelOwner(hotelId) ||
-            isAdmin() ||
+            isHotelStaff(hotelId) ||
+            isSandboxAdmin(hotelId) ||
             (
               (!('guestUid' in incoming()) || incoming().guestUid == request.auth.uid) &&
               get(/databases/$(database)/documents/hotels/$(hotelId)/sessions/$(incoming().sessionId)).data.guestUid == request.auth.uid
@@ -368,8 +392,8 @@ service cloud.firestore {
           (
             (
               (
-                (existing().status != 'completed' && isHotelOwner(hotelId)) ||
-                isAdmin()
+                (existing().status != 'completed' && isHotelStaff(hotelId)) ||
+                isSandboxAdmin(hotelId)
               ) &&
               incoming().diff(existing()).affectedKeys().hasOnly([
                 'status',
