@@ -123,6 +123,23 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     await msgs.doc(guestMessageId).set({sender:'guest',guestUid:guest.uid,text:'Thank you!',timestamp:Timestamp.fromMillis(now-1000)});
     await msgs.doc('ai-'+guestMessageId).set({sender:'ai',guestUid:guest.uid,text:'You are welcome!',timestamp:Timestamp.fromMillis(now)});
     await events.doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex')).set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
+    // Separate room-move fixture keeps feedback tests independent.
+    const moveSession=db.collection('hotels').doc(owner.uid).collection('sessions').doc('move-session');
+    const property=db.collection('hotels').doc(owner.uid);
+    await property.update({locations:[{id:'room205',code:'205',label:'Room 205',type:'room',active:true}]});
+    await moveSession.set({guestUid:guest.uid,status:'active',roomNumber:'101',guestAccessStartedAt:Timestamp.now()});
+    const towels=property.collection('requests').doc('move-towels'), ac=property.collection('requests').doc('move-ac');
+    await towels.set({sessionId:'move-session',roomNumber:'101',status:'pending',item:'Towels'});
+    await ac.set({sessionId:'move-session',roomNumber:'101',status:'in_progress',item:'AC'});
+    const movePayload={hotelId:owner.uid,sessionId:'move-session',moveId:'test-move',fromRoom:'101',destinationId:'room205',decisions:[{id:'move-towels',room:'101',status:'pending',action:'move'},{id:'move-ac',room:'101',status:'in_progress',action:'keep'}]};
+    assert.equal((await call(other,'room-move',movePayload)).status,403);
+    assert.equal((await call(owner,'room-move',{...movePayload,decisions:[]})).status,409);
+    assert.equal((await call(owner,'room-move',movePayload)).status,200);
+    assert.equal((await moveSession.get()).data().roomNumber,'205');
+    assert.equal((await towels.get()).data().roomNumber,'205');
+    assert.equal((await ac.get()).data().roomNumber,'101');
+    assert.equal((await property.collection('roomMoves').doc('test-move').get()).data().staffUid,owner.uid);
+    assert.equal((await call(owner,'room-move',movePayload)).status,200);
     const feedbackPayload={hotelId:owner.uid,sessionId,guestMessageId,rating:5};
     async function vote(a,body){
       const r=await fetch(base+'/api/insights/feedback',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
