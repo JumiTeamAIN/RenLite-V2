@@ -9,13 +9,14 @@ const money = (n: number) => n.toLocaleString('en-US',{style:'currency',currency
 export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({hotelId,targets,requests,sessions,ready,error}) => {
   const [days,setDays] = useState(30);
   const [activity,setActivity]=useState<Record<string,number>|null>(null);
+  const [conversationFeedback,setConversationFeedback]=useState<{count:number;average:number|null}|null>(null);
   const [feedback,setFeedback]=useState<{count:number;average:number|null}|null>(null);
   const [activityError,setActivityError]=useState('');
   const [refresh,setRefresh]=useState(0);
   useEffect(()=>{
     const controller=new AbortController();
     let cancelled=false;
-    setActivity(null);setFeedback(null);setActivityError('');
+    setActivity(null);setFeedback(null);setConversationFeedback(null);setActivityError('');
     (async()=>{
       try{
         const user=auth.currentUser;
@@ -23,7 +24,7 @@ export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;req
         const response=await fetch('/api/insights/'+encodeURIComponent(hotelId)+'?days='+days,{headers:{Authorization:'Bearer '+await user.getIdToken()},signal:controller.signal});
         const data=await response.json();
         if(!response.ok)throw new Error(data.error||'Unable to load assistance activity.');
-        if(!cancelled){setActivity(data.counts);setFeedback(data.feedback||null);}
+        if(!cancelled){setActivity(data.counts);setFeedback(data.feedback||null);setConversationFeedback(data.conversationFeedback||null);}
       }catch(e:any){if(!cancelled)setActivityError(e?.message||'Unable to load assistance activity.');}
     })();
     return ()=>{cancelled=true;controller.abort();};
@@ -84,7 +85,7 @@ export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;req
       ['SLA basis','Current configuration, not historical audit'],
       ['AI assistance activity',activity?'First recorded outcomes; not confirmed resolutions':'Unavailable'],
       ...Object.entries(activity||{}),
-      ['Guest rating average',feedback?.average??'Unavailable'],['Ratings received',feedback?.count??'Unavailable'],
+      ['Legacy response rating average',feedback?.average??'Unavailable'],['Legacy response ratings received',feedback?.count??'Unavailable'],['Ren conversation rating average',conversationFeedback?.average??'Unavailable'],['Conversation ratings received',conversationFeedback?.count??'Unavailable'],
       ['ROI assumptions','Editable estimates, not verified payroll savings'],['Minutes per qualifying request',minutes],['Hourly labor cost USD',wage],['Monthly subscription estimate USD',cost],['Manual intake displacement %',displacement],
       ['Qualifying completed AI requests',eligible.length],['Estimated hours saved',hours.toFixed(2)],['Estimated labor value USD',value.toFixed(2)],['Estimated subscription expense USD',expense.toFixed(2)],['Estimated net value USD',net.toFixed(2)],['Estimated ROI %',roi===null?'Unavailable':roi.toFixed(1)],
       ['Department','Requests','Completed','Avg acknowledgment','Avg completion'],
@@ -132,7 +133,8 @@ export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;req
         {metric('Search unavailable',activity.search_unavailable||0,'No verified local findings')}
         {metric('Failed outcomes',activity.failed||0,'First recorded outcome was unsuccessful')}
       </div>}
-      {feedback && <div className="grid sm:grid-cols-2 gap-3">{metric('Guest response rating',feedback.average===null?'—':feedback.average.toFixed(1)+' / 5','Optional feedback, not overall stay satisfaction')}{metric('Ratings received',feedback.count,'Ratings submitted during selected period')}</div>}
+      {conversationFeedback && <div className="grid sm:grid-cols-2 gap-3">{metric('Ren conversation satisfaction',conversationFeedback.average===null?'—':conversationFeedback.average.toFixed(1)+' / 5','Optional conversation feedback, not hotel service satisfaction')}{metric('Conversation ratings received',conversationFeedback.count,'Ratings submitted during selected period')}</div>}
+      {feedback && feedback.count>0 && <div className="grid sm:grid-cols-2 gap-3">{metric('Legacy response rating',feedback.average===null?'—':feedback.average.toFixed(1)+' / 5','Optional feedback, not overall stay satisfaction')}{metric('Legacy ratings received',feedback.count,'Ratings submitted during selected period')}</div>}
       <p className="text-xs text-slate-500">These counts are not used in ROI yet. Older activity is not backfilled.</p>
     </div>
     <div className="bg-white border rounded-xl p-5 space-y-4"><h2 className="font-semibold text-lg">Estimated return on investment</h2><p className="text-sm text-slate-600">Conservative request-intake model: counts completed AI-created requests only. It excludes fulfillment work and FAQ savings until we can measure them reliably. Assumptions can be saved for this hotel, and are not actual billing or payroll data.</p>
