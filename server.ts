@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { directFaqAnswer } from './services/directFaq.ts';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
@@ -293,6 +294,45 @@ async function startServer() {
       return decoded;
     } catch { return null; }
   };
+
+  // Aggregate usage only: never persist prompts, transcripts, tokens or guest identifiers.
+  // Counts reflect this RenLite backend, not Google's invoice or other Project Omni apps.
+  async function measuredAi<T extends {usageMetadata?: any; candidates?: any[]}>(model:string,operation:string,hotel:string,call:()=>Promise<T>):Promise<T>{
+    const month=new Date().toISOString().slice(0,7);
+    const started=Date.now();
+    let result:T|undefined;
+    try { result=await call(); return result; }
+    finally {
+      const usage=result?.usageMetadata;
+      const count=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)&&v>=0?Math.floor(v):0;
+      const key=createHash('sha256').update([month,model,operation,hotel].join('|')).digest('hex');
+      try{
+        await teamDb().collection('platformAiUsage').doc(key).set({
+          month,model,operation,hotel,
+          attempts:FieldValue.increment(1),successfulResponses:FieldValue.increment(result?1:0),
+          errors:FieldValue.increment(result?0:1),missingUsage:FieldValue.increment(usage?0:1),
+          inputTokens:FieldValue.increment(count(usage?.promptTokenCount)),
+          outputTokens:FieldValue.increment(count(usage?.candidatesTokenCount)),
+          thinkingTokens:FieldValue.increment(count(usage?.thoughtsTokenCount)),
+          cachedInputTokens:FieldValue.increment(count(usage?.cachedContentTokenCount)),
+          totalTokens:FieldValue.increment(count(usage?.totalTokenCount)),
+          searchQueries:FieldValue.increment(result?.candidates?.reduce((n,c)=>n+(Array.isArray(c.groundingMetadata?.webSearchQueries)?c.groundingMetadata.webSearchQueries.length:0),0)||0),
+          elapsedMs:FieldValue.increment(Date.now()-started),updatedAt:FieldValue.serverTimestamp()
+        },{merge:true});
+      }catch{console.warn('[usage] aggregate write failed');}
+    }
+  }
+  app.get('/api/developer/ai-usage',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req);
+    if(!user||user.email!=='jumi@teamain.org'){res.status(403).json({error:'Developer access required.'});return;}
+    const month=typeof req.query.month==='string'?req.query.month:new Date().toISOString().slice(0,7);
+    if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)){res.status(400).json({error:'Invalid month.'});return;}
+    try{
+      const snap=await teamDb().collection('platformAiUsage').where('month','==',month).limit(2001).get();
+      res.json({month,rows:snap.docs.slice(0,2000).map(d=>d.data()),truncated:snap.size>2000});
+    }catch{res.status(503).json({error:'Usage unavailable.'});}
+  });
 
   app.get('/api/team/hotels', async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -659,12 +699,17 @@ async function startServer() {
       return;
     }
 
+    let trustedHotel:any=null;
+    let usageHotel='unattributed';
     // Guest turns must belong to a currently accessible session. Staff diagnostics are separate.
     if (body.sessionId!==undefined || body.guestMessageId!==undefined) {
       if(!validHotelId(body.hotelId)||!validHotelId(body.sessionId)||!validHotelId(body.guestMessageId)){res.status(400).json({error:'Invalid conversation.'});return;}
       try{
-        const session=await teamDb().collection('hotels').doc(body.hotelId).collection('sessions').doc(body.sessionId).get();
+        const hotel=teamDb().collection('hotels').doc(body.hotelId);
+        const [session,property,message]=await Promise.all([hotel.collection('sessions').doc(body.sessionId).get(),hotel.get(),hotel.collection('sessions').doc(body.sessionId).collection('messages').doc(body.guestMessageId).get()]);
         if(!session.exists||!guestAccessOpen(session.data(),decodedUid)){res.status(403).json({error:'Conversation expired or ended. Start a new chat.'});return;}
+        if(!property.exists||!message.exists||message.data()?.sender!=='guest'||message.data()?.guestUid!==decodedUid||typeof body.latestGuestMessage!=='string'||message.data()?.text?.trim()!==body.latestGuestMessage.trim()){res.status(403).json({error:'Invalid guest turn.'});return;}
+        trustedHotel=property.data(); usageHotel=body.hotelId;
       }catch{res.status(503).json({error:'Unable to verify conversation access.'});return;}
     } else {
       const staff=await verifiedStaff(req);
@@ -684,7 +729,7 @@ async function startServer() {
       typeof body.locationType === 'string' ? body.locationType.trim().slice(0, 50) : '';
     const emergencyPhone =
       typeof body.emergencyPhone === 'string' ? body.emergencyPhone.trim().slice(0, 50) : '';
-    const rawFaqs = Array.isArray(body.faqs) ? body.faqs : [];
+    const rawFaqs = trustedHotel ? (Array.isArray(trustedHotel.faqs)?trustedHotel.faqs:[]) : Array.isArray(body.faqs) ? body.faqs : [];
     const rawOpenRequests = Array.isArray(body.openRequests) ? body.openRequests : [];
 
     if (!hotelName || hotelName.length > 200) {
@@ -772,6 +817,16 @@ async function startServer() {
     // Diagnostic metadata contains no guest messages, credentials, or conversation identifiers.
     const searchDiagnostics = { intentDetected: requiresLocalGrounding, area: areaHint, attempts: [] as { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[] };
 
+    // Exact configured English FAQ only. Ambiguous matches and safety signals use normal handling.
+    if(trustedHotel&&!safetySignal.triggered){
+      const answer=directFaqAnswer(latestGuestMessage,safeFaqs);
+      if(answer){
+        await recordAssistance('reply_generated',answer);
+        res.json({text:answer,guestLanguage:'en',roomNumber:knownRoomNumber,humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});
+        return;
+      }
+    }
+
     try {
       const { defaultClient, betaClient } = getAiClients();
 
@@ -856,7 +911,7 @@ STRICT RULES:
             let succeeded = false;
             for (let attempt = 1; attempt <= candidate.retries; attempt++) {
               try {
-                const searchRes = await candidate.client.models.generateContent({
+                const searchRes = await measuredAi(candidate.model,'search',usageHotel,()=>candidate.client.models.generateContent({
                   model: candidate.model,
                   contents: searchPrompt,
                   config: {
@@ -864,7 +919,7 @@ STRICT RULES:
                     ...getThinkingConfigForModel(candidate.model),
                     abortSignal: remainingSignal(Math.max(1, Math.min(9000, searchDeadline - Date.now()))),
                   },
-                });
+                }));
                 const groundedText = searchRes.text?.trim() || '';
                 const metadata = searchRes.candidates?.[0]?.groundingMetadata;
                 const sourceCount = (metadata?.groundingChunks || []).filter(chunk => Boolean(chunk.web?.uri)).length;
@@ -1059,7 +1114,7 @@ ACTION & EXTRACTION RULES:
       for (const candidate of modelCandidates) {
         for (let attempt = 1; attempt <= candidate.retries; attempt++) {
           try {
-            response = await candidate.client.models.generateContent({
+            response = await measuredAi(candidate.model,'concierge',usageHotel,()=>candidate.client.models.generateContent({
               model: candidate.model,
               contents: prompt,
               config: {
@@ -1069,7 +1124,7 @@ ACTION & EXTRACTION RULES:
                 ...getThinkingConfigForModel(candidate.model),
                 abortSignal: remainingSignal(12_000),
               },
-            });
+            }));
             modelCooldownUntil.delete(candidate.model);
             break;
           } catch (err) {
@@ -1088,7 +1143,7 @@ ACTION & EXTRACTION RULES:
                 `[concierge] Structured schema returned 400 on ${candidate.model}, trying JSON prompt fallback.`
               );
               try {
-                response = await candidate.client.models.generateContent({
+                response = await measuredAi(candidate.model,'concierge',usageHotel,()=>candidate.client.models.generateContent({
                   model: candidate.model,
                   contents: `${prompt}\n\nReturn ONLY a raw JSON object with keys: reply (string), replyEnglish (string), latestGuestEnglish (string), guestLanguage (string), roomNumber (string), humanHandoffRequested (boolean), escalationTriggered (boolean), escalationSeverity ("none"|"high"|"critical"), escalationReason (string), requests (array of { item, quantity, category, department, description, priority }).`,
                   config: {
@@ -1096,7 +1151,7 @@ ACTION & EXTRACTION RULES:
                     ...getThinkingConfigForModel(candidate.model),
                     abortSignal: remainingSignal(12_000),
                   },
-                });
+                }));
                 break;
               } catch (fallbackErr) {
                 lastErr = fallbackErr;
@@ -1363,7 +1418,7 @@ ${text}`;
       for (const candidate of candidates) {
         for (let attempt = 1; attempt <= candidate.retries; attempt++) {
           try {
-            response = await candidate.client.models.generateContent({
+            response = await measuredAi(candidate.model,'translate','unattributed',()=>candidate.client.models.generateContent({
               model: candidate.model,
               contents: translatePrompt,
               config: {
@@ -1387,7 +1442,7 @@ ${text}`;
                 ...getThinkingConfigForModel(candidate.model),
                 abortSignal: AbortSignal.timeout(10_000),
               },
-            });
+            }));
             modelCooldownUntil.delete(candidate.model);
             break;
           } catch (err) {
@@ -1544,7 +1599,7 @@ ${JSON.stringify(safeItems)}`;
       for (const candidate of candidates) {
         for (let attempt = 1; attempt <= candidate.retries; attempt++) {
           try {
-            response = await candidate.client.models.generateContent({
+            response = await measuredAi(candidate.model,'translate-batch','unattributed',()=>candidate.client.models.generateContent({
               model: candidate.model,
               contents: batchPrompt,
               config: {
@@ -1572,7 +1627,7 @@ ${JSON.stringify(safeItems)}`;
                 ...getThinkingConfigForModel(candidate.model),
                 abortSignal: AbortSignal.timeout(12_000),
               },
-            });
+            }));
             modelCooldownUntil.delete(candidate.model);
             break;
           } catch (err) {
