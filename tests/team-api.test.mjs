@@ -55,6 +55,87 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await call(agent,'hotels')).data.hotels[0].role,'manager');
     assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
     assert.equal((await call(agent,'hotels')).data.hotels.length,0);
+    // Insights aggregate endpoint: enforce hotel and management role boundaries.
+    const events=db.collection('hotels').doc(owner.uid).collection('assistanceEvents');
+    await events.doc('current').set({kind:'grounded_recommendation',createdAt:Timestamp.now(),version:1});
+    await events.doc('old').set({kind:'failed',createdAt:Timestamp.fromMillis(Date.now()-40*86400000),version:1});
+    await db.collection('hotels').doc(other.uid).collection('assistanceEvents').doc('other').set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
+    async function insights(a,hotelId,days=30){
+      const response=await fetch(base+'/api/insights/'+hotelId+'?days='+days,{headers:{Authorization:'Bearer '+a.token}});
+      return {status:response.status,data:await response.json()};
+    }
+    assert.equal((await insights(other,owner.uid)).status,403);
+    assert.equal((await insights(unverified,owner.uid)).status,401);
+    assert.equal((await insights(agent,owner.uid)).status,403);
+    assert.equal((await insights(owner,owner.uid,15)).status,400);
+    const report=await insights(owner,owner.uid);
+    assert.equal(report.status,200);
+    assert.equal(report.data.counts.grounded_recommendation,1);
+    assert.equal(report.data.counts.failed,0);
+    assert.equal(report.data.counts.reply_generated,0);
+    assert.equal((await insights(owner,owner.uid,90)).data.counts.failed,1);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'associate',active:true})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,403);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:true})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,200);
+    assert.equal((await insights(agent,other.uid)).status,403);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,403);
+    const guest=await account('feedbackguest');
+    const sessionId='feedback-session', guestMessageId='feedback-turn';
+    const session=db.collection('hotels').doc(owner.uid).collection('sessions').doc(sessionId);
+    await session.set({guestUid:guest.uid,status:'active'});
+    await session.collection('messages').doc('ai-'+guestMessageId).set({sender:'ai',guestUid:guest.uid});
+    await events.doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex')).set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
+    const feedbackPayload={hotelId:owner.uid,sessionId,guestMessageId,rating:5};
+    async function vote(a,body){
+      const r=await fetch(base+'/api/insights/feedback',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.status;
+    }
+    assert.equal(await vote(other,feedbackPayload),403);
+    assert.equal(await vote(guest,{...feedbackPayload,rating:6}),400);
+    assert.equal(await vote(guest,{...feedbackPayload,guestMessageId:'missing'}),403);
+    assert.equal(await vote(guest,feedbackPayload),200);
+    assert.equal(await vote(guest,feedbackPayload),409);
+    const rated=await insights(owner,owner.uid);
+    assert.deepEqual(rated.data.feedback,{count:1,average:5});
+    assert.deepEqual((await insights(other,other.uid)).data.feedback,{count:0,average:null});
+    const assumptions={hotelId:owner.uid,minutes:3,wage:25,cost:99,displacement:60};
+    async function settings(a,hotelId,body){
+      const r=await fetch(base+'/api/insights/settings'+(body?'':'/'+hotelId),{method:body?'POST':'GET',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+      return {status:r.status,data:await r.json()};
+    }
+    assert.equal((await settings(other,owner.uid,assumptions)).status,403);
+    assert.equal((await settings(agent,owner.uid)).status,403);
+    assert.equal((await settings(owner,owner.uid,{...assumptions,displacement:101})).status,400);
+    assert.equal((await settings(owner,owner.uid,assumptions)).status,200);
+    assert.deepEqual((await settings(owner,owner.uid)).data.settings,{minutes:3,wage:25,cost:99,displacement:60});
+    assert.equal((await settings(other,other.uid)).data.settings,null);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:true})).status,200);
+    assert.equal((await settings(agent,owner.uid)).status,200);
+    assert.equal((await settings(agent,owner.uid,{...assumptions,cost:129})).status,200);
+    assert.equal((await settings(owner,owner.uid)).data.settings.cost,129);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
+    assert.equal((await settings(agent,owner.uid,assumptions)).status,403);
+    // Staff transitions are recorded once, even with repeated replies and retries.
+    const staffPayload={hotelId:owner.uid,sessionId,action:'takeover',messageId:'takeover-test'};
+    async function staffAction(a,body){
+      const r=await fetch(base+'/api/insights/staff-action',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.status;
+    }
+    assert.equal(await staffAction(guest,staffPayload),403);
+    assert.equal(await staffAction(other,staffPayload),403);
+    assert.equal(await staffAction(agent,staffPayload),403);
+    assert.equal(await staffAction(owner,staffPayload),200);
+    assert.equal(await staffAction(owner,staffPayload),200);
+    assert.equal((await session.get()).data().status,'staff_controlled');
+    assert.equal(await staffAction(owner,{...staffPayload,action:'reply',messageId:'staff-reply-test',text:'Happy to help'}),200);
+    assert.equal((await insights(owner,owner.uid)).data.counts.staff_takeover,1);
+    await session.update({status:'active'});
+    assert.equal(await staffAction(owner,{...staffPayload,action:'reply',messageId:'new-takeover-test',text:'Welcome back'}),200);
+    assert.equal((await insights(owner,owner.uid)).data.counts.staff_takeover,2);
+    await session.update({status:'completed'});
+    assert.equal(await staffAction(owner,{...staffPayload,messageId:'closed-test'}),409);
     const pending=await call(owner,'invitations',{...payload,email:other.email});
     assert.equal(pending.status,201);
     const id=createHash('sha256').update(pending.data.token).digest('hex');

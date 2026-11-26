@@ -21,5 +21,6 @@ jobs:
           java-version: '21'
       - run: npm install --no-audit --no-fund
       - run: npm run build
+      - run: npx tsx --test tests/insights.test.ts
       - run: npm install --no-save --package-lock=false @firebase/rules-unit-testing@5 firebase-tools@14
       - run: npx firebase emulators:exec --config firebase.test.json --project demo-renlite-test --only firestore,auth "node --test --test-concurrency=1 tests/hotel-access.test.mjs tests/team-api.test.mjs"
