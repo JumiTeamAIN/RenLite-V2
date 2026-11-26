@@ -52,6 +52,15 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await policyCall(dev,'model-policy')).data.policy.enabled,false);
     assert.equal((await policyCall(dev,'model-probe',{model:'gemini-2.5-flash',operation:'search'})).status,409);
     assert.equal((await policyCall(owner,'model-probe',{model:'gemini-2.5-flash',operation:'search'})).status,403);
+    // Exercise actual translation routes, not the independent developer probe.
+    for(const [route,body] of [
+      ['translate',{text:'How many bottles of water?',targetLanguage:'es'}],
+      ['translate-batch',{items:[{id:'sample',text:'Necesito agua'}],targetLanguage:'en'}]
+    ]){
+      const response=await fetch(base+'/api/gemini/'+route,{method:'POST',headers:{Authorization:'Bearer '+owner.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      assert.equal(response.status,503);
+      assert.equal((await response.json()).error,'AI translation is temporarily unavailable.');
+    }
     assert.equal((await policyCall(dev,'model-policy',initial.data.policy)).status,200);
     const payload={hotelId:owner.uid,email:agent.email,role:'associate',department:'Front Desk'};
     assert.equal((await call(other,'invitations',payload)).status,403);
