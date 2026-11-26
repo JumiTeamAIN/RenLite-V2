@@ -55,6 +55,32 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await call(agent,'hotels')).data.hotels[0].role,'manager');
     assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
     assert.equal((await call(agent,'hotels')).data.hotels.length,0);
+    // Insights aggregate endpoint: enforce hotel and management role boundaries.
+    const events=db.collection('hotels').doc(owner.uid).collection('assistanceEvents');
+    await events.doc('current').set({kind:'grounded_recommendation',createdAt:Timestamp.now(),version:1});
+    await events.doc('old').set({kind:'failed',createdAt:Timestamp.fromMillis(Date.now()-40*86400000),version:1});
+    await db.collection('hotels').doc(other.uid).collection('assistanceEvents').doc('other').set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
+    async function insights(a,hotelId,days=30){
+      const response=await fetch(base+'/api/insights/'+hotelId+'?days='+days,{headers:{Authorization:'Bearer '+a.token}});
+      return {status:response.status,data:await response.json()};
+    }
+    assert.equal((await insights(other,owner.uid)).status,403);
+    assert.equal((await insights(unverified,owner.uid)).status,401);
+    assert.equal((await insights(agent,owner.uid)).status,403);
+    assert.equal((await insights(owner,owner.uid,15)).status,400);
+    const report=await insights(owner,owner.uid);
+    assert.equal(report.status,200);
+    assert.equal(report.data.counts.grounded_recommendation,1);
+    assert.equal(report.data.counts.failed,0);
+    assert.equal(report.data.counts.reply_generated,0);
+    assert.equal((await insights(owner,owner.uid,90)).data.counts.failed,1);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'associate',active:true})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,403);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:true})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,200);
+    assert.equal((await insights(agent,other.uid)).status,403);
+    assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
+    assert.equal((await insights(agent,owner.uid)).status,403);
     const pending=await call(owner,'invitations',{...payload,email:other.email});
     assert.equal(pending.status,201);
     const id=createHash('sha256').update(pending.data.token).digest('hex');
