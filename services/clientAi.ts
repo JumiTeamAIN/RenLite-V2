@@ -307,6 +307,7 @@ export const sendMessageToAI = async (
             ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
           },
           body: JSON.stringify({
+            hotelId, sessionId, guestMessageId: targetGuestMsgId,
             hotelName: hotelConfig!.name,
             persona: hotelConfig!.persona,
             faqs: hotelConfig!.faqs || [],
