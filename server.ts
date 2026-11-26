@@ -280,6 +280,10 @@ async function startServer() {
     : getFirestore(firebaseAdminApp);
   const digestInvite = (token: string) => createHash('sha256').update(token).digest('hex');
   const validHotelId = (id: unknown): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
+  const guestAccessOpen = (data:any,uid:string) => {
+    const started=data?.guestAccessStartedAt?.toMillis?.();
+    return data?.guestUid===uid && !data?.guestEndedAt && typeof started==='number' && started<=Date.now() && Date.now()-started<86400000;
+  };
   const verifiedStaff = async (req: express.Request) => {
     const header = req.headers.authorization || '';
     if (!header.startsWith('Bearer ')) return null;
@@ -505,7 +509,7 @@ async function startServer() {
           tx.get(hotel.collection('requests').where('sessionId','==',sessionId)),
           tx.get(session.collection('messages').orderBy('timestamp','desc').limit(30))
         ]);
-        if(!s.exists||s.data()?.guestUid!==uid||s.data()?.status!=='active'||!e.exists||e.data()?.kind!=='reply_generated'||guest.data()?.sender!=='guest'||guest.data()?.guestUid!==uid||!closing(guest.data()?.text)||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid)return false;
+        if(!s.exists||!guestAccessOpen(s.data(),uid)||s.data()?.status!=='active'||!e.exists||e.data()?.kind!=='reply_generated'||guest.data()?.sender!=='guest'||guest.data()?.guestUid!==uid||!closing(guest.data()?.text)||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid)return false;
         if(history.docs[0]?.id!=='ai-'+guestMessageId||requests.docs.some(d=>!['completed','cancelled'].includes(d.data().status)))return false;
         if(history.docs.some(d=>d.data().sender==='staff'||/\b(emergency|fire|suicid|assault|harass|injur|unsafe|complaint|stolen|medical|police|blood|choking|allergic)\w*\b/i.test(String(d.data().text||''))))return false;
         const earlier=history.docs.filter(d=>d.data().sender==='guest'&&d.id!==guestMessageId&&!closing(d.data().text)&&String(d.data().text||'').trim().length>=8&&!/^(?:hello|hi|hey|good morning|good evening|good afternoon)[!.\s]*$/i.test(String(d.data().text||'').trim()));
@@ -541,7 +545,7 @@ async function startServer() {
       const feedback=hotel.collection('assistanceFeedback').doc(id);
       const result=await teamDb().runTransaction(async tx=>{
         const [s,e,reply,f,offer]=await Promise.all([tx.get(session),tx.get(event),tx.get(session.collection('messages').doc('ai-'+guestMessageId)),tx.get(feedback),tx.get(hotel.collection('feedbackOffers').doc(sessionId))]);
-        if(!s.exists||s.data()?.guestUid!==uid||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested','configured_faq_match'].includes(e.data()?.kind))return 'denied';
+        if(!s.exists||!guestAccessOpen(s.data(),uid)||!e.exists||!reply.exists||reply.data()?.sender!=='ai'||reply.data()?.guestUid!==uid||!['grounded_recommendation','reply_generated','request_suggested','configured_faq_match'].includes(e.data()?.kind))return 'denied';
         if(f.exists)return 'duplicate';
         if(!offer.exists||offer.data()?.guestMessageId!==guestMessageId||Date.now()-(offer.data()?.createdAt?.toMillis()||0)>=86400000)return 'denied';
         tx.create(feedback,{rating,createdAt:FieldValue.serverTimestamp(),version:2,scope:'conversation'});
@@ -655,6 +659,18 @@ async function startServer() {
       return;
     }
 
+    // Guest turns must belong to a currently accessible session. Staff diagnostics are separate.
+    if (body.sessionId!==undefined || body.guestMessageId!==undefined) {
+      if(!validHotelId(body.hotelId)||!validHotelId(body.sessionId)||!validHotelId(body.guestMessageId)){res.status(400).json({error:'Invalid conversation.'});return;}
+      try{
+        const session=await teamDb().collection('hotels').doc(body.hotelId).collection('sessions').doc(body.sessionId).get();
+        if(!session.exists||!guestAccessOpen(session.data(),decodedUid)){res.status(403).json({error:'Conversation expired or ended. Start a new chat.'});return;}
+      }catch{res.status(503).json({error:'Unable to verify conversation access.'});return;}
+    } else {
+      const staff=await verifiedStaff(req);
+      if(!staff){res.status(403).json({error:'Conversation required.'});return;}
+    }
+
     const hotelName = typeof body.hotelName === 'string' ? body.hotelName.trim() : '';
     const persona = typeof body.persona === 'string' ? body.persona.trim() : '';
     const transcript = typeof body.transcript === 'string' ? body.transcript.trim() : '';
@@ -741,7 +757,7 @@ async function startServer() {
         const event=hotel.collection('assistanceEvents').doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex'));
         await teamDb().runTransaction(async tx=>{
           const [h,s,m,e]=await Promise.all([tx.get(hotel),tx.get(session),tx.get(message),tx.get(event)]);
-          if (!h.exists || !s.exists || s.data()?.guestUid!==decodedUid || ['staff_controlled','completed'].includes(s.data()?.status) ||
+          if (!h.exists || !s.exists || !guestAccessOpen(s.data(),decodedUid) || ['staff_controlled','completed'].includes(s.data()?.status) ||
               !m.exists || m.data()?.sender!=='guest' || m.data()?.guestUid!==decodedUid || m.data()?.text?.trim()!==latestGuestMessage) return;
           if (e.exists) return;
           // Exact configured FAQ match is intentionally narrow; never trust browser-supplied FAQs for classification.
