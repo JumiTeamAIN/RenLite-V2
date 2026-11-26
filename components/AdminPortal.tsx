@@ -1,3 +1,4 @@
+import {parseUploadedFaqs,hasInvalidFaqText,type FaqDraft} from '../services/faqImport';
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { TeamManagement } from './TeamManagement';
@@ -32,90 +33,6 @@ import {
 
 interface AdminPortalProps {
   hotelId: string;
-}
-
-interface FaqDraft {
-  question: string;
-  answer: string;
-}
-
-function parseCsvLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current.trim());
-  return result;
-}
-
-function parseUploadedFaqs(content: string, fileName: string): FaqDraft[] {
-  const lowerName = fileName.toLowerCase();
-
-  if (lowerName.endsWith('.json')) {
-    const parsed = JSON.parse(content);
-    const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.faqs) ? parsed.faqs : [];
-    return items
-      .map((item: any) => ({
-        question: String(item?.question ?? item?.q ?? '').trim(),
-        answer: String(item?.answer ?? item?.a ?? '').trim(),
-      }))
-      .filter((f: FaqDraft) => f.question && f.answer);
-  }
-
-  if (lowerName.endsWith('.csv')) {
-    const lines = content.split(/\r?\n/).filter((l) => l.trim());
-    const rows = lines.map(parseCsvLine);
-    const startIdx =
-      rows.length > 0 &&
-      rows[0][0]?.toLowerCase().includes('question') &&
-      rows[0][1]?.toLowerCase().includes('answer')
-        ? 1
-        : 0;
-    return rows
-      .slice(startIdx)
-      .map((cols) => ({
-        question: (cols[0] || '').trim(),
-        answer: (cols[1] || '').trim(),
-      }))
-      .filter((f) => f.question && f.answer);
-  }
-
-  const qaMatches: FaqDraft[] = [];
-  const blockRegex = /Q:\s*([\s\S]*?)\nA:\s*([\s\S]*?)(?=\nQ:|\s*$)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = blockRegex.exec(content)) !== null) {
-    const question = match[1].trim();
-    const answer = match[2].trim();
-    if (question && answer) {
-      qaMatches.push({ question, answer });
-    }
-  }
-  if (qaMatches.length > 0) return qaMatches;
-
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.split(/\s*\|\s*|\t/))
-    .map((parts) => ({
-      question: (parts[0] || '').trim(),
-      answer: parts.slice(1).join(' ').trim(),
-    }))
-    .filter((f) => f.question && f.answer);
 }
 
 const SESSION_STATUS_LABELS: Record<string, string> = {
@@ -645,6 +562,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     setConfigFeedback(null);
 
     try {
+      if(!/\.(json|csv|txt)$/i.test(file.name))throw Error('Unsupported file type. Save Word documents as TXT or use JSON or CSV.');
+      if(file.size>1024*1024)throw Error('FAQ file must be under 1 MB.');
       const content = await file.text();
       const parsed = parseUploadedFaqs(content, file.name);
       if (parsed.length === 0) {
@@ -655,16 +574,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         return;
       }
 
-      const combined = [...configFaqs, ...parsed].slice(0, 100);
+      if(configFaqs.length+parsed.length>100)throw Error('Import would exceed the 100 FAQ limit. No entries were added.');
+      if(parsed.some(f=>f.question.length>500||f.answer.length>1000))throw Error('FAQ exceeds the question or answer length limit. No entries were added.');
+      const combined = [...configFaqs, ...parsed];
       setConfigFaqs(combined);
       setConfigFeedback({
         type: 'success',
         text: `Imported ${parsed.length} FAQ${parsed.length === 1 ? '' : 's'} from ${file.name}. Click Save Configuration to publish.`,
       });
-    } catch {
+    } catch (err) {
       setConfigFeedback({
         type: 'error',
-        text: 'Could not read that file. Please check the file format and try again.',
+        text: err instanceof Error ? err.message : 'Could not read that file. Please check the file format and try again.',
       });
     } finally {
       if (faqFileInputRef.current) {
@@ -681,6 +602,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       return;
     }
 
+    if(configFaqs.some(f=>hasInvalidFaqText(f.question)||hasInvalidFaqText(f.answer))){setConfigFeedback({type:'error',text:'Remove corrupted FAQ entries before saving.'});return;}
     const cleanedFaqs = configFaqs
       .map((f) => ({
         question: f.question.trim().slice(0, 500),
