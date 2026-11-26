@@ -478,6 +478,43 @@ async function startServer() {
     }catch{res.status(500).json({error:'Unable to save feedback.'});}
   });
 
+  // Hotel-level financial assumptions, never actual billing or payroll data.
+  app.post('/api/insights/settings', async (req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req);
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const {hotelId,minutes,wage,cost,displacement}=req.body||{};
+    const valid=(n:unknown,max:number)=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=max;
+    if(!validHotelId(hotelId)||!valid(minutes,15)||!valid(wage,150)||!valid(cost,5000)||!valid(displacement,100)){res.status(400).json({error:'Invalid financial assumptions.'});return;}
+    try{
+      const db=teamDb(), hotel=db.collection('hotels').doc(hotelId);
+      const saved=await db.runTransaction(async tx=>{
+        const [property,member]=await Promise.all([tx.get(hotel),tx.get(hotel.collection('members').doc(user.uid))]);
+        const m=member.data();
+        if(!property.exists||!(teamAdmin(user.uid,hotelId,true,m,user.email)||(m?.active===true&&m?.role==='manager')))return false;
+        tx.set(hotel.collection('insightsSettings').doc('roi'),{minutes,wage,cost,displacement,updatedAt:FieldValue.serverTimestamp()});
+        return true;
+      });
+      if(!saved){res.status(403).json({error:'Management access required.'});return;}
+      res.json({ok:true});
+    }catch{res.status(500).json({error:'Unable to save financial assumptions.'});}
+  });
+  app.get('/api/insights/settings/:hotelId', async (req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req);
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const hotelId=req.params.hotelId;
+    if(!validHotelId(hotelId)){res.status(400).json({error:'Invalid hotel.'});return;}
+    try{
+      const hotel=teamDb().collection('hotels').doc(hotelId);
+      const [property,member]=await Promise.all([hotel.get(),hotel.collection('members').doc(user.uid).get()]);
+      const m=member.data();
+      if(!property.exists||!(teamAdmin(user.uid,hotelId,true,m,user.email)||(m?.active===true&&m?.role==='manager'))){res.status(403).json({error:'Management access required.'});return;}
+      const settings=(await hotel.collection('insightsSettings').doc('roi').get()).data();
+      res.json({settings:settings?{minutes:settings.minutes,wage:settings.wage,cost:settings.cost,displacement:settings.displacement}:null});
+    }catch{res.status(500).json({error:'Unable to load financial assumptions.'});}
+  });
+
   // Aggregate only; raw event documents are server-only under the default deny rules.
   app.get('/api/insights/:hotelId', async (req, res) => {
     res.set('Cache-Control', 'no-store');
