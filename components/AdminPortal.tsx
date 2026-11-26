@@ -1,4 +1,5 @@
-import {parseUploadedFaqs,hasInvalidFaqText,type FaqDraft} from '../services/faqImport';
+import {extractFaqFile,reviewFaqs} from '../services/documentFaq';
+import {hasInvalidFaqText,type FaqDraft} from '../services/faqImport';
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { TeamManagement } from './TeamManagement';
@@ -141,6 +142,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     text: string;
   } | null>(null);
   const faqFileInputRef = useRef<HTMLInputElement>(null);
+  const [faqImportBusy,setFaqImportBusy]=useState(false);
+  const [faqReview,setFaqReview]=useState<{name:string;items:FaqDraft[];duplicates:number;conflicts:number}|null>(null);
 
   // Locations & QR Codes state
   const [locations, setLocations] = useState<HotelLocation[]>([]);
@@ -562,32 +565,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     setConfigFeedback(null);
 
     try {
-      if(!/\.(json|csv|txt)$/i.test(file.name))throw Error('Unsupported file type. Save Word documents as TXT or use JSON or CSV.');
-      if(file.size>1024*1024)throw Error('FAQ file must be under 1 MB.');
-      const content = await file.text();
-      const parsed = parseUploadedFaqs(content, file.name);
-      if (parsed.length === 0) {
-        setConfigFeedback({
-          type: 'error',
-          text: 'No valid Q&A pairs found. Use JSON ([{question, answer}]), 2-column CSV, or "Q: ... / A: ..." text.',
-        });
-        return;
-      }
-
-      if(configFaqs.length+parsed.length>100)throw Error('Import would exceed the 100 FAQ limit. No entries were added.');
-      if(parsed.some(f=>f.question.length>500||f.answer.length>1000))throw Error('FAQ exceeds the question or answer length limit. No entries were added.');
-      const combined = [...configFaqs, ...parsed];
-      setConfigFaqs(combined);
-      setConfigFeedback({
-        type: 'success',
-        text: `Imported ${parsed.length} FAQ${parsed.length === 1 ? '' : 's'} from ${file.name}. Click Save Configuration to publish.`,
-      });
+      setFaqImportBusy(true);setFaqReview(null);
+      const parsed=await extractFaqFile(file);
+      if(!parsed.length)throw Error('No structured Q&A pairs found. Use questions ending in ? followed by answers, or Excel Question and Answer columns. Scanned PDFs require OCR.');
+      const review=reviewFaqs(configFaqs,parsed);
+      setFaqReview({name:file.name,items:review.accepted,duplicates:review.duplicates,conflicts:review.conflicts});
     } catch (err) {
       setConfigFeedback({
         type: 'error',
         text: err instanceof Error ? err.message : 'Could not read that file. Please check the file format and try again.',
       });
     } finally {
+      setFaqImportBusy(false);
       if (faqFileInputRef.current) {
         faqFileInputRef.current.value = '';
       }
@@ -596,6 +585,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    if(faqImportBusy||faqReview){setConfigFeedback({type:'error',text:'Finish or discard the FAQ import review before saving.'});return;}
     const trimmedName = configName.trim();
     if (!trimmedName) {
       setConfigFeedback({ type: 'error', text: 'Hotel name cannot be empty.' });
@@ -1688,23 +1678,24 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                         Hotel FAQs (<span className="font-mono tabular-nums">{configFaqs.length}/100</span>)
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Upload a <code>.json</code>, <code>.csv</code>, or <code>.txt</code> FAQ file or add Q&amp;As manually.
+                        Upload Word, Excel, PDF, JSON, CSV or TXT files (up to 5 MB), or add Q&amp;As manually.
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
                       <input
                         ref={faqFileInputRef}
                         type="file"
-                        accept=".json,.csv,.txt"
+                        accept=".docx,.xlsx,.pdf,.json,.csv,.txt"
                         onChange={handleFaqFileUpload}
                         className="hidden"
                       />
                       <button
                         type="button"
+                        disabled={faqImportBusy||!!faqReview}
                         onClick={() => faqFileInputRef.current?.click()}
                         className="border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold px-3 py-2 rounded-lg transition-colors"
                       >
-                        Upload FAQs
+                        {faqImportBusy?'Reading document…':'Upload FAQs'}
                       </button>
                       <button
                         type="button"
@@ -1716,6 +1707,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                     </div>
                   </div>
 
+                  {faqReview&&<div className="border rounded-lg p-4 space-y-3 bg-slate-50">
+                    <h4 className="font-semibold">Review import: {faqReview.name}</h4>
+                    <p className="text-xs">{faqReview.items.length} new FAQs · {faqReview.duplicates} duplicates skipped · {faqReview.conflicts} conflicting answers skipped (existing knowledge retained). Review extracted text for accuracy.</p>
+                    <div className="max-h-80 overflow-auto space-y-2">{faqReview.items.map((f,i)=><div className="border rounded p-2 bg-white space-y-2" key={i}><input aria-label="Imported question" className="border rounded p-2 w-full" value={f.question} onChange={e=>setFaqReview(p=>p?{...p,items:p.items.map((x,j)=>j===i?{...x,question:e.target.value}:x)}:p)}/><textarea aria-label="Imported answer" className="border rounded p-2 w-full" value={f.answer} onChange={e=>setFaqReview(p=>p?{...p,items:p.items.map((x,j)=>j===i?{...x,answer:e.target.value}:x)}:p)}/><button type="button" className="text-red-700 text-xs" onClick={()=>setFaqReview(p=>p?{...p,items:p.items.filter((_,j)=>j!==i)}:p)}>Exclude FAQ</button></div>)}</div>
+                    <button type="button" disabled={!faqReview.items.length} className="bg-indigo-600 text-white rounded p-2 disabled:opacity-50" onClick={()=>{try{const review=reviewFaqs(configFaqs,faqReview.items);if(configFaqs.length+review.accepted.length>100)throw Error('Import exceeds 100 FAQ limit. Exclude entries first.');setConfigFaqs([...configFaqs,...review.accepted]);setFaqReview(null);setConfigFeedback({type:'success',text:'Added '+review.accepted.length+' FAQs to draft. '+(review.duplicates+review.conflicts)+' duplicates or conflicts skipped. Click Save Configuration to publish.'});}catch(err){setConfigFeedback({type:'error',text:err instanceof Error?err.message:'Import failed'});}}}>Add reviewed FAQs</button>
+                    <button type="button" className="ml-2 border rounded p-2" onClick={()=>setFaqReview(null)}>Discard import</button>
+                  </div>}
                   {configFaqs.length === 0 ? (
                     <div className="border border-dashed border-slate-300 rounded-lg p-6 text-center text-xs text-slate-500">
                       No FAQs added yet. Click <strong>Upload FAQs</strong> or <strong>+ Add FAQ</strong> to teach Ren about check-in times, Wi-Fi, parking, or amenities.
