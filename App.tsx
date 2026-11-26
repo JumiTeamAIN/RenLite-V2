@@ -48,7 +48,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-100 md:py-4">
         <div className="h-screen md:h-[calc(100vh-2rem)] w-full max-w-2xl mx-auto bg-white md:rounded-2xl md:border md:border-slate-200 md:shadow-sm overflow-hidden">
-          <ChatWindow key={hotelId} hotelId={hotelId} locationCode={locationCode} />
+          <ChatWindow key={hotelId+':'+(locationCode||'')} hotelId={hotelId} locationCode={locationCode} />
         </div>
       </div>
     );

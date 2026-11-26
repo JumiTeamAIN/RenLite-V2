@@ -132,6 +132,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     return () => clearTimeout(timer);
   }, [isThinking]);
 
+  const storageKey = 'ren_guest_tab_v2:'+hotelId+':'+encodeURIComponent((locationCode||'').trim().toLowerCase());
+  const rememberSession = (id:string) => {
+    try { sessionStorage.setItem(storageKey,JSON.stringify({id,at:Date.now()})); } catch {}
+  };
+  const forgetSession = () => {
+    try { sessionStorage.removeItem(storageKey); localStorage.removeItem('ren_session_'+hotelId); } catch {}
+  };
+  const [resumeId,setResumeId]=useState<string|null>(null);
+  const [ended,setEnded]=useState(false);
+  // Only guest interaction extends the local idle window; staff replies do not.
+  useEffect(()=>{
+    if(!sessionId||ended)return;
+    const touch=()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at<1800000)rememberSession(sessionId);}catch{}};
+    const idle=()=>{if(session?.guestAccessStartedAt && Date.now()-session.guestAccessStartedAt.toMillis()>=86400000){forgetSession();setEnded(true);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');return;}try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===sessionId&&Date.now()-v.at>=1800000){setResumeId(sessionId);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');}}catch{}};
+    const timer=setInterval(idle,15000);
+    window.addEventListener('pointerdown',touch);
+    window.addEventListener('keydown',touch);
+    document.addEventListener('visibilitychange',idle);
+    return()=>{clearInterval(timer);window.removeEventListener('pointerdown',touch);window.removeEventListener('keydown',touch);document.removeEventListener('visibilitychange',idle);};
+  },[sessionId,storageKey,ended,session?.guestAccessStartedAt]);
+
   // 1. Initialize Auth, Hotel Config, and Session
   useEffect(() => {
     let cancelled = false;
@@ -185,30 +206,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       ).slice(0, 100);
       const initialType = (matchedLoc?.type || (locationCode ? 'other' : '')).slice(0, 50);
 
-      // Check local storage first (Persist session across refresh)
-      let storedSession: string | null = null;
-      try { storedSession = localStorage.getItem(`ren_session_${hotelId}`); } catch { /* Storage may be blocked on mobile. */ }
-      if (storedSession) {
-        try {
-          const existingSnap = await getDoc(doc(db, 'hotels', hotelId, 'sessions', storedSession));
-          if (existingSnap.exists() && existingSnap.data()?.guestUid === user.uid) {
-            if (!cancelled) setSessionId(storedSession);
-            return;
+      // Never restore legacy hotel-wide localStorage sessions. Tab storage is scoped to the QR location.
+      let storedSession:string|null=null;
+      let age=Infinity;
+      try {
+        localStorage.removeItem('ren_session_'+hotelId);
+        const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');
+        if(typeof v?.id==='string'&&Number.isFinite(v.at)){storedSession=v.id;age=Date.now()-v.at;}
+      }catch{}
+      if(storedSession&&age>=0&&age<86400000){
+        if(age>=1800000){if(!cancelled)setResumeId(storedSession);return;}
+        try{
+          const snap=await getDoc(doc(db,'hotels',hotelId,'sessions',storedSession));
+          if(snap.exists()&&snap.data()?.guestUid===user.uid&&(!initialRoom||snap.data()?.roomNumber===initialRoom)){
+            if(!cancelled){rememberSession(storedSession);setResumeId(null);setSessionId(storedSession);}return;
           }
-        } catch (err: any) {
-          if (err?.code !== 'permission-denied' && err?.code !== 'not-found') {
-            if (!cancelled) setInitError('Unable to reconnect to your existing conversation. Please refresh when your connection is restored.');
-            return;
-          }
+        }catch(err:any){
+          if(err?.code!=='permission-denied'&&err?.code!=='not-found'){if(!cancelled)setInitError('Unable to reconnect. Please refresh when your connection is restored.');return;}
         }
-        try { localStorage.removeItem(`ren_session_${hotelId}`); } catch { /* Storage unavailable. */ }
       }
+      forgetSession();
+      if(!cancelled)setResumeId(null);
 
       const sessionsPath = `hotels/${hotelId}/sessions`;
       try {
         if (cancelled) return;
         const sessionRef = await addDoc(collection(db, sessionsPath), {
           guestUid: user.uid,
+          guestAccessStartedAt: serverTimestamp(),
           lastUpdatedAt: serverTimestamp(),
           previewText: 'Started conversation',
           isUnread: false,
@@ -219,7 +244,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           ...(initialType ? { locationType: initialType } : {}),
         });
 
-        try { localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id); } catch { /* Storage unavailable. */ }
+        rememberSession(sessionRef.id);
         if (!cancelled) setSessionId(sessionRef.id);
       } catch (err) {
         if (!cancelled) {
@@ -236,38 +261,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     return () => {
       cancelled = true;
     };
-  }, [hotelId]);
-
-  // Apply QR location context if changed after session init
-  useEffect(() => {
-    if (!sessionId || !guestUid || !locationCode || !session) return;
-    if (session.status === 'completed') return;
-
-    const matchedLoc = normalizeLocationMatch(locationCode, hotelConfig?.locations);
-    const nextRoom = (matchedLoc?.code || locationCode).trim().slice(0, 50);
-    const nextLabel = (matchedLoc?.label || `Location ${locationCode}`).slice(0, 100);
-    const nextType = (matchedLoc?.type || 'other').slice(0, 50);
-
-    if (session.roomNumber === nextRoom && session.locationLabel === nextLabel) return;
-
-    const sessionPath = `hotels/${hotelId}/sessions/${sessionId}`;
-    updateDoc(doc(db, sessionPath), {
-      lastUpdatedAt: serverTimestamp(),
-      roomNumber: nextRoom,
-      locationLabel: nextLabel,
-      locationType: nextType,
-      ...(matchedLoc?.id ? { locationId: matchedLoc.id } : {}),
-    }).catch((err) => console.warn('Could not sync QR location context:', err));
-  }, [
-    locationCode,
-    sessionId,
-    guestUid,
-    hotelId,
-    hotelConfig,
-    session?.roomNumber,
-    session?.locationLabel,
-    session?.status,
-  ]);
+  }, [hotelId,locationCode]);
 
   // 2. Listen to Session Document (for real-time Human Takeover & Location status)
   useEffect(() => {
@@ -335,7 +329,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   useEffect(() => {
     if (!sessionId || !guestUid) return;
     const requestsPath = `hotels/${hotelId}/requests`;
-    const q = query(collection(db, requestsPath), where('guestUid', '==', guestUid));
+    const q = query(collection(db, requestsPath), where('guestUid', '==', guestUid), where('sessionId','==',sessionId));
 
     return onSnapshot(
       q,
@@ -459,6 +453,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     try {
       const sessionRef = await addDoc(collection(db, sessionsPath), {
         guestUid,
+        guestAccessStartedAt: serverTimestamp(),
         lastUpdatedAt: serverTimestamp(),
         previewText: 'Started conversation',
         isUnread: false,
@@ -468,7 +463,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         ...(initialLabel ? { locationLabel: initialLabel } : {}),
         ...(initialType ? { locationType: initialType } : {}),
       });
-      try { localStorage.setItem(`ren_session_${hotelId}`, sessionRef.id); } catch { /* Storage unavailable. */ }
+      rememberSession(sessionRef.id);
       setMessages([]);
       setSessionId(sessionRef.id);
       setActiveView('chat');
@@ -650,6 +645,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     }
   };
 
+  if (ended || resumeId) {
+    return <main className="flex items-center justify-center h-full bg-slate-50 p-6"><div className="max-w-sm bg-white border rounded-2xl p-6 space-y-4 text-center">
+      <h1 className="font-semibold text-lg">{ended?'Chat ended':'Conversation paused'}</h1>
+      <p className="text-sm text-slate-600">{ended?'This conversation is no longer available to you. Outstanding service requests remain with the hotel team.':'For privacy, your previous conversation is hidden after inactivity. Resume only if this is your conversation.'}</p>
+      {!ended&&<button className="w-full bg-indigo-600 text-white rounded-lg p-3" onClick={()=>{try{const v=JSON.parse(sessionStorage.getItem(storageKey)||'null');if(v?.id===resumeId&&Date.now()-v.at<86400000)rememberSession(resumeId!);else forgetSession();}catch{forgetSession();}window.location.reload();}}>Resume my conversation</button>}
+      <button className="w-full border rounded-lg p-3" onClick={()=>{forgetSession();window.location.reload();}}>Start a new chat</button>
+    </div></main>;
+  }
+
   if (initError) {
     return (
       <div className="flex items-center justify-center h-full bg-slate-50 p-6 text-center">
@@ -724,6 +728,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                 : 'Speak with Staff'}
           </button>
         </div>
+
+        <div className="flex justify-end mt-1"><button type="button" disabled={isSending||isThinking||quickSubmitting} onClick={async()=>{if(!window.confirm('End this chat? Outstanding requests will remain with the hotel team.'))return;try{await updateDoc(doc(db,'hotels',hotelId,'sessions',sessionId),{guestEndedAt:serverTimestamp(),lastUpdatedAt:serverTimestamp()});}catch{setChatError('Could not confirm that this conversation ended. Please reconnect and try again.');return;}forgetSession();setEnded(true);setResumeId(null);setSessionId(null);setMessages([]);setGuestRequests([]);setSession(null);setInputText('');setPendingGuestMessages([]);}} className="text-xs text-slate-600 underline disabled:opacity-50">End Chat</button></div>
 
         {/* Inline Location Selector */}
         {showLocationEditor && (

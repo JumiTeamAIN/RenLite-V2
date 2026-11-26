@@ -50,7 +50,7 @@ export async function fetchSessionOpenRequests(
   const requestsPath = `hotels/${hotelId}/requests`;
   try {
     const reqRef = collection(db, requestsPath);
-    const q = guestUid ? query(reqRef, where('guestUid', '==', guestUid)) : query(reqRef);
+    const q = guestUid ? query(reqRef, where('guestUid', '==', guestUid), where('sessionId','==',sessionId)) : query(reqRef);
     const snap = await getDocs(q);
     return snap.docs
       .map((d) => ({ id: d.id, ...d.data() } as Request))
