@@ -7,6 +7,7 @@ import {
   query,
   where,
   getDocs,
+  getDoc,
 } from 'firebase/firestore';
 import { db, OperationType, handleFirestoreError } from './firebase';
 import { Request } from '../types';
@@ -71,7 +72,11 @@ export async function submitServiceRequest(
     .trim()
     .slice(0, 100);
   const quantity = Math.max(1, Math.min(50, Math.round(input.quantity || 1)));
+  const session=await getDoc(doc(db,'hotels',input.hotelId,'sessions',input.sessionId));
+  if(!session.exists())throw Error('Conversation unavailable');
+  const current=session.data();
   const roomNumber = (input.roomNumber?.trim() || 'Pending room #').slice(0, 50);
+  if(current.roomMoveAt && current.roomNumber!==roomNumber)throw Error('Room assignment changed. Please review the request again.');
   const priority =
     input.priority === 'urgent' || input.priority === 'high' ? input.priority : 'normal';
   const status = input.status === 'escalated' ? 'escalated' : 'pending';
@@ -80,7 +85,7 @@ export async function submitServiceRequest(
     input.openRequests ??
     (await fetchSessionOpenRequests(input.hotelId, input.sessionId, input.guestUid));
 
-  const duplicate = findMatchingOpenRequest(existingList, {
+  const duplicate = findMatchingOpenRequest(existingList.filter(r=>r.roomNumber===roomNumber || (!current.roomMoveAt && ['Pending room #','Location needed',''].includes(r.roomNumber))), {
     item: cleanItem,
     category: cleanCategory,
   });
