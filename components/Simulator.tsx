@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { onIdTokenChanged } from 'firebase/auth';
+import { DeveloperUsage } from './DeveloperUsage';
 import { ChatWindow } from './ChatWindow';
 import { AdminPortal } from './AdminPortal';
 import { auth, db, OperationType, handleFirestoreError } from '../services/firebase';
@@ -23,6 +24,7 @@ export const Simulator: React.FC<SimulatorProps> = (props) => {
 };
 
 const AuthorizedSimulator: React.FC<SimulatorProps> = ({ hotelId, initialLocationCode }) => {
+  const [showUsage,setShowUsage]=useState(false);
   const [simLocationCode, setSimLocationCode] = useState<string | undefined>(initialLocationCode);
 
   // Ensure Test Hotel Exists (Self-Correction for Dev Mode)
@@ -56,6 +58,7 @@ const AuthorizedSimulator: React.FC<SimulatorProps> = ({ hotelId, initialLocatio
     });
   }, [hotelId]);
 
+  if(showUsage)return <main className="min-h-screen bg-slate-100 p-4"><button className="mb-3 border rounded px-3 py-2" onClick={()=>setShowUsage(false)}>Back to sandbox</button><DeveloperUsage/></main>;
   return (
     <div className="flex flex-col lg:flex-row h-screen bg-slate-900 p-4 lg:p-6 gap-6 overflow-hidden">
       {/* Left: Guest View (Mobile Simulator) */}
@@ -93,7 +96,7 @@ const AuthorizedSimulator: React.FC<SimulatorProps> = ({ hotelId, initialLocatio
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-slate-200 text-xs font-semibold tracking-wide">
             Staff Operations Console
-          </h3>
+          </h3><button className="text-white text-xs border rounded px-2 py-1" onClick={()=>setShowUsage(true)}>Command Center</button>
         </div>
         <div className="flex-1 bg-white rounded-xl shadow-2xl overflow-hidden min-h-0">
           <AdminPortal hotelId={hotelId} />
