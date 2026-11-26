@@ -6,6 +6,7 @@ import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/LoginPage';
 import { SignUpPage } from './components/SignUpPage';
 import { Onboarding } from './components/Onboarding';
+import { InvitePage } from './components/InvitePage';
 
 function parseHashRoute(hash: string): { path: string; params: URLSearchParams } {
   const normalized = hash || '#/';
@@ -29,6 +30,8 @@ const App: React.FC = () => {
 
   const { path, params } = parseHashRoute(route);
   const locationCode = params.get('loc') || undefined;
+
+  if (path === '#/invite') return <InvitePage token={params.get('token') || ''} />;
 
   // --- DEV / SIMULATOR ---
   if (path.startsWith('#/simulate/')) {
