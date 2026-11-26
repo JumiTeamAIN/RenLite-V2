@@ -59,6 +59,8 @@ export type SessionStatus =
 export interface Session {
   id: string;
   guestUid: string;
+  guestAccessStartedAt?: Timestamp;
+  guestEndedAt?: Timestamp;
   roomNumber?: string;
   locationId?: string;
   locationLabel?: string;
