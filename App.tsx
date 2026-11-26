@@ -36,7 +36,7 @@ const App: React.FC = () => {
   // --- DEV / SIMULATOR ---
   if (path.startsWith('#/simulate/')) {
     const hotelId = path.split('/')[2] || 'test-hotel-001';
-    return <Simulator hotelId={hotelId} initialLocationCode={locationCode} />;
+    return <Simulator key={hotelId} hotelId={hotelId} initialLocationCode={locationCode} />;
   }
 
   // --- GUEST ---
@@ -48,7 +48,7 @@ const App: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-100 md:py-4">
         <div className="h-screen md:h-[calc(100vh-2rem)] w-full max-w-2xl mx-auto bg-white md:rounded-2xl md:border md:border-slate-200 md:shadow-sm overflow-hidden">
-          <ChatWindow hotelId={hotelId} locationCode={locationCode} />
+          <ChatWindow key={hotelId} hotelId={hotelId} locationCode={locationCode} />
         </div>
       </div>
     );
@@ -59,7 +59,7 @@ const App: React.FC = () => {
     const hotelId = path.split('/')[2];
     return (
       <div className="h-screen">
-        <AdminPortal hotelId={hotelId} />
+        <AdminPortal key={hotelId} hotelId={hotelId} />
       </div>
     );
   }
