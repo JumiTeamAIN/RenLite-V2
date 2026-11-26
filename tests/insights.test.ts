@@ -93,7 +93,7 @@ test('structured document questions preserve exact answers and skip duplicate or
  assert.equal(review.accepted.length,2);assert.equal(review.duplicates,1);assert.equal(review.conflicts,1);
 });
 test('Excel FAQ extraction reads question and answer columns',async()=>{
- const {Workbook}=await import('exceljs');const wb=new Workbook();const sheet=wb.addWorksheet('FAQs');sheet.addRow(['Question','Answer']);sheet.addRow(['Parking?','$15 plus tax']);const bytes=await wb.xlsx.writeBuffer();
+ const excel=await import('exceljs');const Workbook=excel.Workbook||excel.default?.Workbook;const wb=new Workbook();const sheet=wb.addWorksheet('FAQs');sheet.addRow(['Question','Answer']);sheet.addRow(['Parking?','$15 plus tax']);const bytes=await wb.xlsx.writeBuffer();
  const pairs=await extractFaqFile(new File([new Uint8Array(bytes)],'FAQ.xlsx'));
  assert.deepEqual(pairs,[{question:'Parking?',answer:'$15 plus tax'}]);
 });
