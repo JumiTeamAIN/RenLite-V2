@@ -1,18 +1,7 @@
 import React, { useState } from 'react';
 import type { Request, Session } from '../types';
 
-const ms = (t: any): number | null => {
-  const n = t?.toMillis?.();
-  return typeof n === 'number' && Number.isFinite(n) ? n : null;
-};
-const elapsed = (a: any, b: any) => {
-  const start = ms(a), end = ms(b);
-  return start !== null && end !== null && end >= start ? (end-start)/60000 : null;
-};
-const mean = (xs: (number|null)[]) => {
-  const valid = xs.filter((x): x is number => x !== null);
-  return valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : null;
-};
+import { elapsed, mean, inPeriod, estimateROI } from '../services/insightsMath';
 const duration = (n: number|null) => n === null ? '—' : n.toFixed(1)+' min';
 const money = (n: number) => n.toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
 
@@ -22,16 +11,15 @@ export const Insights: React.FC<{requests:Request[];sessions:Session[];ready:boo
   const [wage,setWage] = useState(22);
   const [cost,setCost] = useState(149);
   const [displacement,setDisplacement] = useState(50);
-  const now = Date.now(), start = now-days*86400000;
-  const inWindow = (t:any) => {const n=ms(t);return n!==null && n>=start && n<=now;};
+  const now = Date.now();
+  const inWindow = (t:any) => inPeriod(t,now,days);
   const cohort = requests.filter(r=>inWindow(r.createdAt));
   const completed = cohort.filter(r=>r.status==='completed');
   const ai = cohort.filter(r=>r.source==='ai');
   const eligible = ai.filter(r=>r.status==='completed');
   const active = requests.filter(r=>!['completed','cancelled'].includes(r.status));
   const recentSessions = sessions.filter(s=>inWindow(s.lastUpdatedAt));
-  const hours = eligible.length*minutes*displacement/100/60;
-  const value = hours*wage, expense=cost*days/30, net=value-expense;
+  const {hours,value,expense,net,roi} = estimateROI(eligible.length,minutes,displacement,wage,cost,days);
   const departments = [...new Set(cohort.map(r=>r.department||r.category||'Unassigned'))].sort();
   const metric = (label:string,value:React.ReactNode,note:string) => <div className="bg-white border rounded-xl p-4"><p className="text-sm text-slate-600">{label}</p><p className="text-2xl font-bold mt-1">{value}</p><p className="text-xs text-slate-500 mt-1">{note}</p></div>;
   if(error) return <section className="p-6"><h1 className="text-2xl font-bold">RenLite Insights</h1><p role="alert" className="text-red-700 mt-4">Analytics unavailable: {error}</p></section>;
@@ -59,7 +47,7 @@ export const Insights: React.FC<{requests:Request[];sessions:Session[];ready:boo
       {metric('Estimated labor capacity value',money(value),'Not verified payroll savings')}
       {metric('Estimated subscription expense',money(expense),'Prorated using a 30-day month')}
       {metric('Estimated net value',money(net),'Labor value less subscription estimate')}
-      {metric('Estimated ROI',expense>0?(net/expense*100).toFixed(0)+'%':'—','Excludes other costs and benefits')}
+      {metric('Estimated ROI',roi!==null?roi.toFixed(0)+'%':'—','Excludes other costs and benefits')}
       </div><p className="text-xs text-slate-500">Historical coverage depends on stored records. Current status can change; missing timestamps are excluded from averages. No guest messages or personal identifiers are displayed.</p>
     </div>
   </section>;
