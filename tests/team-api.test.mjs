@@ -81,6 +81,25 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await insights(agent,other.uid)).status,403);
     assert.equal((await call(owner,'member',{hotelId:owner.uid,uid:agent.uid,role:'manager',active:false})).status,200);
     assert.equal((await insights(agent,owner.uid)).status,403);
+    const guest=await account('feedbackguest');
+    const sessionId='feedback-session', guestMessageId='feedback-turn';
+    const session=db.collection('hotels').doc(owner.uid).collection('sessions').doc(sessionId);
+    await session.set({guestUid:guest.uid,status:'active'});
+    await session.collection('messages').doc('ai-'+guestMessageId).set({sender:'ai',guestUid:guest.uid});
+    await events.doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex')).set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
+    const feedbackPayload={hotelId:owner.uid,sessionId,guestMessageId,rating:5};
+    async function vote(a,body){
+      const r=await fetch(base+'/api/insights/feedback',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.status;
+    }
+    assert.equal(await vote(other,feedbackPayload),403);
+    assert.equal(await vote(guest,{...feedbackPayload,rating:6}),400);
+    assert.equal(await vote(guest,{...feedbackPayload,guestMessageId:'missing'}),403);
+    assert.equal(await vote(guest,feedbackPayload),200);
+    assert.equal(await vote(guest,feedbackPayload),409);
+    const rated=await insights(owner,owner.uid);
+    assert.deepEqual(rated.data.feedback,{count:1,average:5});
+    assert.deepEqual((await insights(other,other.uid)).data.feedback,{count:0,average:null});
     const pending=await call(owner,'invitations',{...payload,email:other.email});
     assert.equal(pending.status,201);
     const id=createHash('sha256').update(pending.data.token).digest('hex');
