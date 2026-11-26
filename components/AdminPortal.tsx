@@ -266,7 +266,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   }, [hotelId]);
 
   const canConfigure = staffRole === 'admin' || staffRole === 'manager' || staffRole === 'legacy';
-  const canManageTeam = staffRole === 'admin';
+  const canManageTeam = staffRole === 'admin' || staffRole === 'legacy';
 
   useEffect(() => {
     if ((!canConfigure && ['locations','config'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
