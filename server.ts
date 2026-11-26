@@ -450,6 +450,33 @@ async function startServer() {
     } catch { res.status(500).json({ error: 'Unable to accept invitation.' }); }
   });
 
+  // Aggregate only; raw event documents are server-only under the default deny rules.
+  app.get('/api/insights/:hotelId', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const user = await verifiedStaff(req);
+    if (!user) { res.status(401).json({error:'Verified staff sign-in required.'}); return; }
+    const hotelId = req.params.hotelId;
+    const days = Number(req.query.days || 30);
+    if (!validHotelId(hotelId) || ![7,30,90].includes(days)) { res.status(400).json({error:'Invalid reporting period or hotel.'}); return; }
+    try {
+      const hotel = teamDb().collection('hotels').doc(hotelId);
+      const [property,member] = await Promise.all([hotel.get(),hotel.collection('members').doc(user.uid).get()]);
+      const m=member.data();
+      if (!property.exists || !(teamAdmin(user.uid,hotelId,true,m,user.email) || (m?.active===true && m?.role==='manager'))) {
+        res.status(403).json({error:'Management access required.'}); return;
+      }
+      const from=Timestamp.fromMillis(Date.now()-days*86400000);
+      const to=Timestamp.now();
+      const kinds=['grounded_recommendation','request_suggested','handoff','reply_generated','search_unavailable','failed'] as const;
+      const base=hotel.collection('assistanceEvents').where('createdAt','>=',from).where('createdAt','<=',to);
+      const counts:Record<string,number>=Object.fromEntries(kinds.map(k=>[k,0]));
+      const snapshot=await base.limit(10001).get();
+      if(snapshot.size>10000){res.status(422).json({error:'Too much activity for this reporting period; select a shorter period.'});return;}
+      for(const event of snapshot.docs){const k=event.data().kind;if(kinds.includes(k))counts[k]++;}
+      res.json({counts,from:from.toDate().toISOString(),to:to.toDate().toISOString()});
+    } catch { res.status(500).json({error:'Unable to load assistance activity.'}); }
+  });
+
   app.post('/api/gemini/concierge', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -557,6 +584,25 @@ async function startServer() {
       transcript
     );
     const areaHint = extractAreaHint(persona, safeFaqs);
+    // Best-effort telemetry: require a real guest-owned message and deduplicate by turn.
+    // A generated response is not proof of delivery, resolution or labor displacement.
+    const recordAssistance = async (kind: string) => {
+      const {hotelId,sessionId,guestMessageId}=body;
+      if (!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)) return;
+      try {
+        const hotel=teamDb().collection('hotels').doc(hotelId);
+        const session=hotel.collection('sessions').doc(sessionId);
+        const message=session.collection('messages').doc(guestMessageId);
+        const event=hotel.collection('assistanceEvents').doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex'));
+        await teamDb().runTransaction(async tx=>{
+          const [h,s,m,e]=await Promise.all([tx.get(hotel),tx.get(session),tx.get(message),tx.get(event)]);
+          if (!h.exists || !s.exists || s.data()?.guestUid!==decodedUid || ['staff_controlled','completed'].includes(s.data()?.status) ||
+              !m.exists || m.data()?.sender!=='guest' || m.data()?.guestUid!==decodedUid || m.data()?.text?.trim()!==latestGuestMessage) return;
+          if (e.exists) return;
+          tx.create(event,{kind,createdAt:FieldValue.serverTimestamp(),version:1});
+        });
+      } catch { console.warn('[insights] assistance event unavailable'); }
+    };
     // Diagnostic metadata contains no guest messages, credentials, or conversation identifiers.
     const searchDiagnostics = { intentDetected: requiresLocalGrounding, area: areaHint, attempts: [] as { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[] };
 
@@ -697,6 +743,7 @@ STRICT RULES:
       }
 
       if (directGroundedReply) {
+        await recordAssistance('grounded_recommendation');
         res.json({
           searchDiagnostics,
           text: directGroundedReply,
@@ -715,6 +762,7 @@ STRICT RULES:
 
       if (requiresLocalGrounding && !mightContainServiceOrHandoff && !assumeNonEnglish && !verifiedLocalFindings && areaHint && !safeFaqs.some(f => needsLocalSearchGrounding(f.question, ''))) {
         const mapsUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(`${latestMsgText.slice(0, 200)} near ${areaHint}`);
+        await recordAssistance('search_unavailable');
         res.json({ searchDiagnostics, text: `I couldn't verify individual recommendations right now. You can explore nearby options here: ${mapsUrl}\nPlease confirm hours and offers directly with the business. Our front desk can also help.`, guestLanguage: 'en', roomNumber: knownRoomNumber || '', humanHandoffRequested: false, escalation: { triggered: false, severity: 'none', reason: '' }, requests: [] });
         return;
       }
@@ -1048,6 +1096,7 @@ ACTION & EXTRACTION RULES:
         parsed.humanHandoffRequested === true ||
         String(parsed.humanHandoffRequested).toLowerCase() === 'true';
 
+      await recordAssistance(escalationTriggered || humanHandoffRequested ? 'handoff' : normalizedRequests.length ? 'request_suggested' : !(typeof parsed.reply==='string' && parsed.reply.trim()) ? 'failed' : requiresLocalGrounding && !verifiedLocalFindings ? 'search_unavailable' : 'reply_generated');
       res.json({
         searchDiagnostics,
         text,
@@ -1076,6 +1125,7 @@ ACTION & EXTRACTION RULES:
         : status === 429
           ? 'Rate limit reached. Please try again in a moment.'
           : rawMessage;
+      await recordAssistance('failed');
       res.status(status).json({ error: clientMessage, searchDiagnostics });
     }
   });
