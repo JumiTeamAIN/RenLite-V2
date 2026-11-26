@@ -1,12 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { Request, Session } from '../types';
+import { auth } from '../services/firebase';
 
 import { elapsed, mean, inPeriod, estimateROI } from '../services/insightsMath';
 const duration = (n: number|null) => n === null ? '—' : n.toFixed(1)+' min';
 const money = (n: number) => n.toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
 
-export const Insights: React.FC<{requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({requests,sessions,ready,error}) => {
+export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({hotelId,requests,sessions,ready,error}) => {
   const [days,setDays] = useState(30);
+  const [activity,setActivity]=useState<Record<string,number>|null>(null);
+  const [activityError,setActivityError]=useState('');
+  const [refresh,setRefresh]=useState(0);
+  useEffect(()=>{
+    const controller=new AbortController();
+    let cancelled=false;
+    setActivity(null);setActivityError('');
+    (async()=>{
+      try{
+        const user=auth.currentUser;
+        if(!user)throw new Error('Sign in first.');
+        const response=await fetch('/api/insights/'+encodeURIComponent(hotelId)+'?days='+days,{headers:{Authorization:'Bearer '+await user.getIdToken()},signal:controller.signal});
+        const data=await response.json();
+        if(!response.ok)throw new Error(data.error||'Unable to load assistance activity.');
+        if(!cancelled)setActivity(data.counts);
+      }catch(e:any){if(!cancelled)setActivityError(e?.message||'Unable to load assistance activity.');}
+    })();
+    return ()=>{cancelled=true;controller.abort();};
+  },[hotelId,days,refresh]);
   const [minutes,setMinutes] = useState(2);
   const [wage,setWage] = useState(22);
   const [cost,setCost] = useState(149);
@@ -37,6 +57,19 @@ export const Insights: React.FC<{requests:Request[];sessions:Session[];ready:boo
       {metric('Escalated requests',cohort.filter(r=>r.status==='escalated').length,'Current status, not historical escalation count')}
     </div>
     <div className="bg-white border rounded-xl p-4 overflow-x-auto"><h2 className="font-semibold mb-3">Department performance</h2><table className="w-full text-sm text-left"><thead className="text-slate-600"><tr>{['Department','Created','Completed','Avg. acknowledgment','Avg. completion'].map(h=><th className="p-2" key={h}>{h}</th>)}</tr></thead><tbody>{departments.map(d=>{const rs=cohort.filter(r=>(r.department||r.category||'Unassigned')===d);const done=rs.filter(r=>r.status==='completed');return <tr key={d} className="border-t"><td className="p-2">{d}</td><td className="p-2">{rs.length}</td><td className="p-2">{done.length}</td><td className="p-2">{duration(mean(rs.map(r=>elapsed(r.createdAt,r.acknowledgedAt))))}</td><td className="p-2">{duration(mean(done.map(r=>elapsed(r.createdAt,r.completedAt))))}</td></tr>})}</tbody></table>{!departments.length&&<p className="text-sm text-slate-500 p-2">No requests in this period.</p>}</div>
+    <div className="bg-white border rounded-xl p-5 space-y-3">
+      <div className="flex justify-between items-center"><h2 className="font-semibold text-lg">AI assistance activity</h2><button className="border rounded p-2 text-sm" onClick={()=>setRefresh(x=>x+1)}>Refresh</button></div>
+      <p className="text-sm text-slate-600">Backend-recorded first outcomes for guest message turns since tracking began. Not a count of resolved needs or proven savings. Staff diagnostics excluded.</p>
+      {activityError?<p role="alert" className="text-sm text-red-700">{activityError}</p>:activity===null?<p role="status" className="text-sm">Loading activity…</p>:<div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+        {metric('Grounded local replies',activity.grounded_recommendation||0,'Direct search-grounded response generated')}
+        {metric('Request suggestions',activity.request_suggested||0,'Model proposed a request; not proof of logging')}
+        {metric('Other replies generated',activity.reply_generated||0,'May include greetings and clarification')}
+        {metric('Human handoff signals',activity.handoff||0,'Model requested staff or escalation')}
+        {metric('Search unavailable',activity.search_unavailable||0,'No verified local findings')}
+        {metric('Failed outcomes',activity.failed||0,'First recorded outcome was unsuccessful')}
+      </div>}
+      <p className="text-xs text-slate-500">These counts are not used in ROI yet. Older activity is not backfilled.</p>
+    </div>
     <div className="bg-white border rounded-xl p-5 space-y-4"><h2 className="font-semibold text-lg">Estimated return on investment</h2><p className="text-sm text-slate-600">Conservative request-intake model: counts completed AI-created requests only. It excludes fulfillment work and FAQ savings until we can measure them reliably. Assumptions are editable for this session, not actual billing or payroll data.</p>
       <div className="grid sm:grid-cols-2 gap-4">
         {([['Minutes saved per qualifying request',minutes,setMinutes,0,15],['Loaded hourly labor cost (USD)',wage,setWage,0,150],['Monthly subscription estimate (USD)',cost,setCost,0,5000],['Share replacing manual intake (%)',displacement,setDisplacement,0,100]] as const).map(([label,v,set,min,max])=><label key={label} className="text-sm">{label}<input className="block border rounded-lg p-2 w-full mt-1" type="number" min={min} max={max} step="any" value={v} onChange={e=>{const n=Number(e.target.value);if(Number.isFinite(n))set(Math.min(max,Math.max(min,n)));}}/></label>)}
