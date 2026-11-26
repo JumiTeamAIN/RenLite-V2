@@ -75,6 +75,17 @@ const firebaseConfig: FirebaseAppletConfig = configPath
         'gen-lang-client-0488200827',
     };
 
+// Test runs must use both local emulators and an isolated demo project.
+const teamEmulatorTest = process.env.RENLITE_EMULATOR_TEST === '1';
+if (teamEmulatorTest) {
+  if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST ||
+      process.env.GCLOUD_PROJECT !== 'demo-renlite-test') {
+    throw new Error('RenLite emulator tests require both emulators and demo-renlite-test.');
+  }
+  firebaseConfig.projectId = 'demo-renlite-test';
+  firebaseConfig.firestoreDatabaseId = '(default)';
+}
+
 const firebaseAdminApp = getApps().length
   ? getApp()
   : initializeApp({ projectId: firebaseConfig.projectId });
@@ -264,7 +275,9 @@ async function startServer() {
   });
 
   // Staff invitations: bearer tokens are never stored in plaintext.
-  const teamDb = () => getFirestore(firebaseAdminApp, firebaseConfig.firestoreDatabaseId || '(default)');
+  const teamDb = () => firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'
+    ? getFirestore(firebaseAdminApp, firebaseConfig.firestoreDatabaseId)
+    : getFirestore(firebaseAdminApp);
   const digestInvite = (token: string) => createHash('sha256').update(token).digest('hex');
   const validHotelId = (id: unknown): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id);
   const verifiedStaff = async (req: express.Request) => {
