@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react';
 import type { Request, Session } from '../types';
 import { auth } from '../services/firebase';
 
-import { elapsed, mean, inPeriod, estimateROI } from '../services/insightsMath';
+import { elapsed, mean, inPeriod, estimateROI, responseCompliance, type ResponseTargets } from '../services/insightsMath';
 const duration = (n: number|null) => n === null ? '—' : n.toFixed(1)+' min';
 const money = (n: number) => n.toLocaleString('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2});
 
-export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({hotelId,requests,sessions,ready,error}) => {
+export const Insights: React.FC<{hotelId:string;targets:ResponseTargets|null;requests:Request[];sessions:Session[];ready:boolean;error:string}> = ({hotelId,targets,requests,sessions,ready,error}) => {
   const [days,setDays] = useState(30);
   const [activity,setActivity]=useState<Record<string,number>|null>(null);
   const [feedback,setFeedback]=useState<{count:number;average:number|null}|null>(null);
@@ -41,6 +41,7 @@ export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Sess
   const active = requests.filter(r=>!['completed','cancelled'].includes(r.status));
   const recentSessions = sessions.filter(s=>inWindow(s.lastUpdatedAt));
   const {hours,value,expense,net,roi} = estimateROI(eligible.length,minutes,displacement,wage,cost,days);
+  const sla=responseCompliance(cohort,targets,now);
   const departments = [...new Set(cohort.map(r=>r.department||r.category||'Unassigned'))].sort();
   const metric = (label:string,value:React.ReactNode,note:string) => <div className="bg-white border rounded-xl p-4"><p className="text-sm text-slate-600">{label}</p><p className="text-2xl font-bold mt-1">{value}</p><p className="text-xs text-slate-500 mt-1">{note}</p></div>;
   if(error) return <section className="p-6"><h1 className="text-2xl font-bold">RenLite Insights</h1><p role="alert" className="text-red-700 mt-4">Analytics unavailable: {error}</p></section>;
@@ -58,6 +59,15 @@ export const Insights: React.FC<{hotelId:string;requests:Request[];sessions:Sess
       {metric('Escalated requests',cohort.filter(r=>r.status==='escalated').length,'Current status, not historical escalation count')}
     </div>
     <div className="bg-white border rounded-xl p-4 overflow-x-auto"><h2 className="font-semibold mb-3">Department performance</h2><table className="w-full text-sm text-left"><thead className="text-slate-600"><tr>{['Department','Created','Completed','Avg. acknowledgment','Avg. completion'].map(h=><th className="p-2" key={h}>{h}</th>)}</tr></thead><tbody>{departments.map(d=>{const rs=cohort.filter(r=>(r.department||r.category||'Unassigned')===d);const done=rs.filter(r=>r.status==='completed');return <tr key={d} className="border-t"><td className="p-2">{d}</td><td className="p-2">{rs.length}</td><td className="p-2">{done.length}</td><td className="p-2">{duration(mean(rs.map(r=>elapsed(r.createdAt,r.acknowledgedAt))))}</td><td className="p-2">{duration(mean(done.map(r=>elapsed(r.createdAt,r.completedAt))))}</td></tr>})}</tbody></table>{!departments.length&&<p className="text-sm text-slate-500 p-2">No requests in this period.</p>}</div>
+    <div className="bg-white border rounded-xl p-5 space-y-3"><h2 className="font-semibold text-lg">Response target performance</h2><p className="text-sm text-slate-600">Based on today's saved response targets and request acknowledgment timestamps. This is a retrospective estimate, not a historical SLA audit. Zero or missing targets are excluded.</p><div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
+      {metric('Response target met',sla.rate===null?'—':sla.rate.toFixed(1)+'%','On-time / (on-time + late + overdue)')}
+      {metric('On-time acknowledgments',sla.met,'Acknowledged within target')}
+      {metric('Late acknowledgments',sla.late,'Acknowledged after target')}
+      {metric('Overdue without acknowledgment',sla.overdue,'No acknowledgment recorded and target passed')}
+      {metric('Still within target',sla.pending,'Not yet acknowledged')}
+      {metric('Missing evidence',sla.unknown,'Missing or invalid response timestamps')}
+      {metric('Excluded requests',sla.excluded,'Cancelled or no applicable configured target')}
+    </div></div>
     <div className="bg-white border rounded-xl p-5 space-y-3">
       <div className="flex justify-between items-center"><h2 className="font-semibold text-lg">AI assistance activity</h2><button className="border rounded p-2 text-sm" onClick={()=>setRefresh(x=>x+1)}>Refresh</button></div>
       <p className="text-sm text-slate-600">Backend-recorded first outcomes for guest message turns since tracking began. Not a count of resolved needs or proven savings. Staff diagnostics excluded.</p>
