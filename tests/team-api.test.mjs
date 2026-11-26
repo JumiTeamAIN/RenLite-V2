@@ -85,7 +85,12 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     const sessionId='feedback-session', guestMessageId='feedback-turn';
     const session=db.collection('hotels').doc(owner.uid).collection('sessions').doc(sessionId);
     await session.set({guestUid:guest.uid,status:'active'});
-    await session.collection('messages').doc('ai-'+guestMessageId).set({sender:'ai',guestUid:guest.uid});
+    const msgs=session.collection('messages'), now=Date.now();
+    await msgs.doc('prior-question').set({sender:'guest',guestUid:guest.uid,text:'When does breakfast start?',timestamp:Timestamp.fromMillis(now-3000)});
+    await msgs.doc('ai-prior-question').set({sender:'ai',guestUid:guest.uid,text:'Breakfast starts at seven.',timestamp:Timestamp.fromMillis(now-2000)});
+    await events.doc(createHash('sha256').update(sessionId+'|prior-question').digest('hex')).set({kind:'configured_faq_match',createdAt:Timestamp.now(),version:1});
+    await msgs.doc(guestMessageId).set({sender:'guest',guestUid:guest.uid,text:'Thank you!',timestamp:Timestamp.fromMillis(now-1000)});
+    await msgs.doc('ai-'+guestMessageId).set({sender:'ai',guestUid:guest.uid,text:'You are welcome!',timestamp:Timestamp.fromMillis(now)});
     await events.doc(createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex')).set({kind:'reply_generated',createdAt:Timestamp.now(),version:1});
     const feedbackPayload={hotelId:owner.uid,sessionId,guestMessageId,rating:5};
     async function vote(a,body){
@@ -95,6 +100,19 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(await vote(other,feedbackPayload),403);
     assert.equal(await vote(guest,{...feedbackPayload,rating:6}),400);
     assert.equal(await vote(guest,{...feedbackPayload,guestMessageId:'missing'}),403);
+    async function offer(a,body){
+      const r=await fetch(base+'/api/insights/feedback-offer',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify(body)});
+      return r.status;
+    }
+    assert.equal(await vote(guest,feedbackPayload),403);
+    assert.equal(await offer(other,feedbackPayload),409);
+    assert.equal(await offer(guest,{...feedbackPayload,guestMessageId:'prior-question'}),409);
+    const openRequest=db.collection('hotels').doc(owner.uid).collection('requests').doc('feedback-open');
+    await openRequest.set({sessionId,status:'pending'});
+    assert.equal(await offer(guest,feedbackPayload),409);
+    await openRequest.update({status:'completed'});
+    assert.equal(await offer(guest,feedbackPayload),200);
+    assert.equal(await offer(guest,feedbackPayload),409);
     assert.equal(await vote(guest,feedbackPayload),200);
     assert.equal(await vote(guest,feedbackPayload),409);
     const rated=await insights(owner,owner.uid);
