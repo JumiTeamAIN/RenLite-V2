@@ -81,3 +81,17 @@ test('expired and ended guest sessions deny messages and requests while staff re
  await assertSucceeds(updateDoc(doc(guest,'hotels','ownerA','sessions','fresh'),{guestEndedAt:serverTimestamp(),lastUpdatedAt:serverTimestamp()}));
  await assertFails(getDoc(doc(guest,'hotels','ownerA','sessions','fresh')));
 });
+
+test('staff-moved room cannot be overwritten and stale guest delivery is rejected',async()=>{
+ const guest=db('guestA',{firebase:{sign_in_provider:'anonymous'}});
+ await env.withSecurityRulesDisabled(async ctx=>{
+   await setDoc(doc(ctx.firestore(),'hotels','ownerA','sessions','moved'),{guestUid:'guestA',guestAccessStartedAt:Timestamp.now(),roomMoveAt:Timestamp.now(),roomNumber:'205',lastUpdatedAt:Timestamp.now(),previewText:'Moved',isUnread:false,status:'active'});
+ });
+ const session=doc(guest,'hotels','ownerA','sessions','moved');
+ await assertFails(updateDoc(session,{roomNumber:'101',lastUpdatedAt:serverTimestamp()}));
+ await assertSucceeds(updateDoc(session,{previewText:'Hello',lastUpdatedAt:serverTimestamp()}));
+ const request=(roomNumber)=>({guestUid:'guestA',sessionId:'moved',item:'Towels',category:'Housekeeping',roomNumber,status:'pending',createdAt:serverTimestamp(),lastUpdated:serverTimestamp()});
+ await assertFails(setDoc(doc(guest,'hotels','ownerA','requests','stale-room'),request('101')));
+ await assertSucceeds(setDoc(doc(guest,'hotels','ownerA','requests','new-room'),request('205')));
+ await assertFails(getDoc(doc(db('guestB',{firebase:{sign_in_provider:'anonymous'}}),'hotels','ownerA','sessions','moved')));
+});

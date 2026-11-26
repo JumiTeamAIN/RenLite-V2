@@ -61,6 +61,7 @@ export interface Session {
   guestUid: string;
   guestAccessStartedAt?: Timestamp;
   guestEndedAt?: Timestamp;
+  roomMoveAt?: Timestamp;
   roomNumber?: string;
   locationId?: string;
   locationLabel?: string;

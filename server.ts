@@ -572,6 +572,45 @@ async function startServer() {
   });
 
   // Record actual transitions atomically with the staff message/session update.
+  // Staff-authorized move: review every open request, preserve historical IDs and timestamps.
+  app.post('/api/team/room-move',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req);
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const {hotelId,sessionId,moveId,fromRoom,destinationId,decisions}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(moveId)||!validHotelId(destinationId)||typeof fromRoom!=='string'||!fromRoom||fromRoom.length>50||!Array.isArray(decisions)||decisions.length>100||decisions.some(d=>!d||!validHotelId(d.id)||!['move','keep','cancel'].includes(d.action)||typeof d.room!=='string'||typeof d.status!=='string')||new Set(decisions.map(d=>d.id)).size!==decisions.length){
+      res.status(400).json({error:'Invalid room move.'});return;
+    }
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId),audit=hotel.collection('roomMoves').doc(moveId);
+      const outcome=await db.runTransaction(async tx=>{
+        const [h,m,ss,prior,requests]=await Promise.all([tx.get(hotel),tx.get(hotel.collection('members').doc(user.uid)),tx.get(session),tx.get(audit),tx.get(hotel.collection('requests').where('sessionId','==',sessionId).limit(401))]);
+        const member=m.data(),current=ss.data();
+        if(!h.exists||!(teamAdmin(user.uid,hotelId,true,member,user.email)||(member?.active===true&&['manager','associate'].includes(member.role))))return 'denied';
+        if(prior.exists)return prior.data()?.sessionId===sessionId&&prior.data()?.staffUid===user.uid?'saved':'conflict';
+        if(!current||!guestAccessOpen(current,current.guestUid)||current.status==='completed'||current.roomNumber!==fromRoom||requests.size>400)return 'conflict';
+        const locations=Array.isArray(h.data()?.locations)?h.data()!.locations:[];
+        const dest=locations.find((l:any)=>l.id===destinationId&&l.active===true&&['room','suite'].includes(l.type));
+        if(!dest||typeof dest.code!=='string'||!dest.code.trim()||dest.code.length>50||dest.code===fromRoom||typeof dest.label!=='string'||dest.label.length>100)return 'conflict';
+        const open=requests.docs.filter(d=>!['completed','cancelled'].includes(d.data().status));
+        if(open.length!==decisions.length||open.some(d=>!decisions.some(x=>x.id===d.id&&x.room===d.data().roomNumber&&x.status===d.data().status)))return 'conflict';
+        const changes=open.map(d=>{const action=decisions.find(x=>x.id===d.id).action;return {id:d.id,action,fromRoom:d.data().roomNumber,toRoom:action==='move'?dest.code:d.data().roomNumber,previousStatus:d.data().status};});
+        for(const c of changes){
+          const ref=hotel.collection('requests').doc(c.id);
+          if(c.action==='move')tx.update(ref,{roomNumber:dest.code,lastUpdated:FieldValue.serverTimestamp()});
+          if(c.action==='cancel')tx.update(ref,{status:'cancelled',lastUpdated:FieldValue.serverTimestamp()});
+        }
+        tx.update(session,{roomNumber:dest.code,locationId:dest.id,locationLabel:dest.label,locationType:dest.type,roomMoveAt:FieldValue.serverTimestamp(),lastUpdatedAt:FieldValue.serverTimestamp()});
+        tx.create(audit,{sessionId,staffUid:user.uid,fromRoom,toRoom:dest.code,changes,createdAt:FieldValue.serverTimestamp()});
+        tx.create(session.collection('messages').doc('room-move-'+moveId),{sender:'system',guestUid:current.guestUid,text:'Hotel staff updated your room from '+fromRoom+' to '+dest.code+'. Please check My Requests for updated delivery locations.',timestamp:FieldValue.serverTimestamp()});
+        return 'saved';
+      });
+      if(outcome==='denied'){res.status(403).json({error:'Hotel staff access required.'});return;}
+      if(outcome!=='saved'){res.status(409).json({error:'Room or requests changed, or conversation is unavailable. Refresh and review again.'});return;}
+      res.json({ok:true});
+    }catch{res.status(503).json({error:'Unable to confirm room move. Refresh before retrying.'});}
+  });
+
   app.post('/api/insights/staff-action', async (req,res)=>{
     res.set('Cache-Control','no-store');
     const user=await verifiedStaff(req);

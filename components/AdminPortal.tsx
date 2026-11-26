@@ -401,6 +401,26 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
 
   const selectedSession = sessions.find((s) => s.id === selectedSessionId) || null;
   const selectedSessionRequests = requests.filter((r) => r.sessionId === selectedSessionId);
+  const [moveReview,setMoveReview]=useState<{sessionId:string;fromRoom:string;moveId:string;requests:Request[]}|null>(null);
+  const [moveDestination,setMoveDestination]=useState('');
+  const [moveDecisions,setMoveDecisions]=useState<Record<string,string>>({});
+  const [moveBusy,setMoveBusy]=useState(false);
+  const [moveError,setMoveError]=useState('');
+  const beginMove=()=>{
+    if(!selectedSession?.roomNumber)return;
+    setMoveReview({sessionId:selectedSession.id,fromRoom:selectedSession.roomNumber,moveId:crypto.randomUUID(),requests:selectedSessionRequests.filter(r=>!['completed','cancelled'].includes(r.status))});
+    setMoveDestination('');setMoveDecisions({});setMoveError('');
+  };
+  const confirmMove=async()=>{
+    if(!moveReview||!moveDestination||!auth.currentUser||moveBusy)return;
+    setMoveBusy(true);setMoveError('');
+    try{
+      const response=await fetch('/api/team/room-move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+await auth.currentUser.getIdToken()},body:JSON.stringify({hotelId,sessionId:moveReview.sessionId,moveId:moveReview.moveId,fromRoom:moveReview.fromRoom,destinationId:moveDestination,decisions:moveReview.requests.map(r=>({id:r.id,room:r.roomNumber,status:r.status,action:moveDecisions[r.id]}))})});
+      if(!response.ok)throw Error((await response.json()).error||'Room move failed.');
+      setMoveReview(null);
+    }catch(e:any){setMoveError(e.message||'Unable to confirm room move.');}finally{setMoveBusy(false);}
+  };
+
   const detectedGuestLang = (selectedSession?.guestLanguage || 'en').trim().toLowerCase();
   const effectiveReplyTargetLang =
     replyTargetLang === 'auto' ? detectedGuestLang || 'en' : replyTargetLang;
@@ -1060,6 +1080,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                     </div>
 
                     <div className="flex items-center gap-2">
+                      {selectedSession.status!=='completed'&&selectedSession.roomNumber&&!selectedSession.guestEndedAt&&<button type="button" disabled={!requestsReady||!!requestsError} onClick={beginMove} className="px-3 py-2 border rounded-lg text-xs font-semibold disabled:opacity-50">Move Guest</button>}
                       {selectedSession.status !== 'staff_controlled' ? (
                         <button
                           type="button"
@@ -1089,6 +1110,16 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                     </div>
                   </div>
 
+                  {moveReview&&<div role="dialog" aria-label="Move guest" className="bg-white border-b p-4 space-y-3 max-h-[55vh] overflow-auto">
+                    <h3 className="font-semibold">Move guest from {moveReview.fromRoom}</h3>
+                    <p className="text-xs">Confirm the room move in your PMS first. This updates only this conversation, not the hotel reservation.</p>
+                    <select aria-label="Destination room" className="border rounded p-2" value={moveDestination} onChange={e=>setMoveDestination(e.target.value)} disabled={moveBusy}><option value="">Select destination room</option>{(hotelConfig?.locations||[]).filter(l=>l.active&&['room','suite'].includes(l.type)&&l.code!==moveReview.fromRoom).map(l=><option key={l.id} value={l.id}>{l.label}</option>)}</select>
+                    {moveReview.requests.map(r=><div key={r.id} className="border rounded p-2 flex flex-wrap items-center gap-2"><div className="flex-1"><strong>{r.item}</strong><div className="text-xs">{r.department||r.category} · {r.roomNumber} · {r.status}</div></div><select aria-label={'Action for '+r.item} className="border rounded p-1" disabled={moveBusy} value={moveDecisions[r.id]||''} onChange={e=>setMoveDecisions(p=>({...p,[r.id]:e.target.value}))}><option value="">Choose action</option><option value="move">Transfer to new room</option><option value="keep">Keep at current location</option><option value="cancel">Cancel request</option></select></div>)}
+                    {!moveReview.requests.length&&<p>No outstanding requests.</p>}
+                    {moveError&&<p role="alert" className="text-red-700">{moveError}</p>}
+                    <button disabled={moveBusy||!moveDestination||moveReview.requests.some(r=>!moveDecisions[r.id])} onClick={confirmMove} className="bg-indigo-600 text-white rounded px-3 py-2 disabled:opacity-50">Confirm room move</button>
+                    <button disabled={moveBusy} onClick={()=>setMoveReview(null)} className="ml-2 border rounded px-3 py-2">Close</button>
+                  </div>}
                   {/* Messages Feed */}
                   <div className="flex-1 overflow-y-auto p-6 space-y-3">
                     {chatMessages.map((m) => {

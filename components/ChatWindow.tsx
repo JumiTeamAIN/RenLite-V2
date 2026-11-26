@@ -218,7 +218,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         if(age>=1800000){if(!cancelled)setResumeId(storedSession);return;}
         try{
           const snap=await getDoc(doc(db,'hotels',hotelId,'sessions',storedSession));
-          if(snap.exists()&&snap.data()?.guestUid===user.uid&&(!initialRoom||snap.data()?.roomNumber===initialRoom)){
+          if(snap.exists()&&snap.data()?.guestUid===user.uid&&(!initialRoom||snap.data()?.roomNumber===initialRoom||snap.data()?.roomMoveAt)){
             if(!cancelled){rememberSession(storedSession);setResumeId(null);setSessionId(storedSession);}return;
           }
         }catch(err:any){
@@ -479,6 +479,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const handleSaveLocation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sessionId || !guestUid || !locationDraft.trim()) return;
+    if(session?.roomMoveAt){setChatError('Your room was updated by hotel staff. Please contact staff for another room move.');return;}
     setSavingLocation(true);
     const raw = locationDraft.trim();
     const matched = normalizeLocationMatch(raw, hotelConfig?.locations);
@@ -558,7 +559,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     e.preventDefault();
     if (!selectedTemplate || !sessionId || !guestUid) return;
 
-    const rawLoc = (quickLocationInput || session?.roomNumber || '').trim();
+    const rawLoc = (session?.roomMoveAt ? session.roomNumber || '' : quickLocationInput || session?.roomNumber || '').trim();
     if (!rawLoc) {
       setQuickFeedback({
         type: 'error',
@@ -701,6 +702,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
             <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
               <button
                 type="button"
+                disabled={!!session?.roomMoveAt}
                 onClick={() => {
                   setLocationDraft(session?.roomNumber || '');
                   setShowLocationEditor((v) => !v);
@@ -1047,7 +1049,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                   type="text"
                   required
                   maxLength={50}
-                  value={quickLocationInput}
+                  value={session?.roomMoveAt ? session.roomNumber || '' : quickLocationInput}
+                  readOnly={!!session?.roomMoveAt}
                   onChange={(e) => setQuickLocationInput(e.target.value)}
                   placeholder="e.g. Room 412 or Pool Deck"
                   className="w-full min-h-[44px] border border-slate-300 rounded-xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
