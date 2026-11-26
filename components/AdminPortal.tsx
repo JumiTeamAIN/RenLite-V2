@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { TeamManagement } from './TeamManagement';
+import { Insights } from './Insights';
 import {
   collection,
   query,
@@ -150,9 +151,13 @@ const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
 ];
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
-  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config' | 'team'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config' | 'team' | 'insights'>('inbox');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
+  const [sessionsReady, setSessionsReady] = useState(false);
+  const [requestsReady, setRequestsReady] = useState(false);
+  const [sessionsError, setSessionsError] = useState('');
+  const [requestsError, setRequestsError] = useState('');
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [replyText, setReplyText] = useState('');
@@ -244,6 +249,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       setIsAuthReady(false);
       setIsAuthenticated(false);
       setStaffRole(null);
+      setSessionsReady(false); setRequestsReady(false); setSessionsError(''); setRequestsError('');
       setStaffIdentity(user?.displayName || user?.email || '');
       setSessions([]);
       setRequests([]);
@@ -280,7 +286,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const canManageTeam = staffRole === 'admin' || staffRole === 'legacy';
 
   useEffect(() => {
-    if ((!canConfigure && ['locations','config'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
+    if ((!canConfigure && ['locations','config','insights'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
   }, [activeTab, canConfigure, canManageTeam]);
 
   // Load Config
@@ -348,11 +354,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     const q = query(collection(db, path), orderBy('lastUpdatedAt', 'desc'));
     return onSnapshot(
       q,
+      { includeMetadataChanges: true },
       (snap) => {
         setSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Session)));
+        setSessionsReady(!snap.metadata.fromCache); setSessionsError('');
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, path);
+        setSessionsReady(false); setSessionsError('Unable to load sessions. Check connection and hotel access.');
       }
     );
   }, [hotelId, isAuthReady, isAuthenticated]);
@@ -364,11 +372,13 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     const q = query(collection(db, path), orderBy('createdAt', 'desc'));
     return onSnapshot(
       q,
+      { includeMetadataChanges: true },
       (snap) => {
         setRequests(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Request)));
+        setRequestsReady(!snap.metadata.fromCache); setRequestsError('');
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, path);
+        setRequestsReady(false); setRequestsError('Unable to load requests. Check connection and hotel access.');
       }
     );
   }, [hotelId, isAuthReady, isAuthenticated]);
@@ -929,6 +939,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
             Configuration
           </button>
           </>}
+          {canConfigure && <button type="button" onClick={()=>setActiveTab('insights')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='insights'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Insights</button>}
           {canManageTeam && <button type="button" onClick={()=>setActiveTab('team')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='team'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Team Management</button>}
         </nav>
         <div className="p-4 border-t border-slate-800 text-xs space-y-2">
@@ -942,6 +953,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden min-w-0">
+        {canConfigure && activeTab === 'insights' && <Insights key={hotelId} requests={requests} sessions={sessions} ready={sessionsReady && requestsReady} error={sessionsError || requestsError} />}
         {canManageTeam && activeTab === 'team' && <TeamManagement key={hotelId} hotelId={hotelId} />}
         {/* TAB 1: LIVE INBOX */}
         {activeTab === 'inbox' && (
