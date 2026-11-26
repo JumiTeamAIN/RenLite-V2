@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { TeamManagement } from './TeamManagement';
 import {
   collection,
   query,
@@ -149,7 +150,7 @@ const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
 ];
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
-  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config' | 'team'>('inbox');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -163,6 +164,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const [hotelConfig, setHotelConfig] = useState<HotelConfig | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [staffRole, setStaffRole] = useState<'admin' | 'manager' | 'associate' | 'legacy' | null>(null);
 
   // Filters
   const [inboxFilter, setInboxFilter] = useState<
@@ -225,11 +227,50 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
-    return onAuthStateChanged(auth, (user) => {
-      setIsAuthenticated(Boolean(user));
-      setIsAuthReady(true);
+    let unsubscribeMember: (() => void) | undefined;
+    let generation = 0;
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      generation++;
+      unsubscribeMember?.();
+      setIsAuthReady(false);
+      setIsAuthenticated(false);
+      setStaffRole(null);
+      setSessions([]);
+      setRequests([]);
+      setChatMessages([]);
+      setSelectedSessionId(null);
+      setHotelConfig(null);
+      setActiveTab('inbox');
+      const grant = (role: 'admin' | 'manager' | 'associate' | 'legacy' | null) => {
+        setStaffRole(role);
+        setIsAuthenticated(Boolean(role));
+        setIsAuthReady(true);
+        if (!role) {
+          setSessions([]); setRequests([]); setChatMessages([]); setSelectedSessionId(null);
+          setHotelConfig(null); setLocations([]); setConfigFaqs([]); setActiveTab('inbox');
+        }
+      };
+      if (!user || user.isAnonymous) { grant(null); return; }
+      if (user.uid === hotelId) { grant('admin'); return; }
+      // Preserve the existing verified sandbox operator only; never grant a new global role.
+      if (hotelId === 'test-hotel-001' && user.emailVerified && user.email === 'jumi@teamain.org') { grant('legacy'); return; }
+      const current = generation;
+      unsubscribeMember = onSnapshot(doc(db, 'hotels', hotelId, 'members', user.uid), snap => {
+        if (current !== generation) return;
+        const data = snap.data();
+        const role = data?.role;
+        grant(data?.active === true && ['admin','manager','associate'].includes(role) ? role : null);
+      }, () => { if (current === generation) grant(null); });
     });
-  }, []);
+    return () => { generation++; unsubscribeMember?.(); unsubscribe(); };
+  }, [hotelId]);
+
+  const canConfigure = staffRole === 'admin' || staffRole === 'manager' || staffRole === 'legacy';
+  const canManageTeam = staffRole === 'admin';
+
+  useEffect(() => {
+    if ((!canConfigure && ['locations','config'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
+  }, [activeTab, canConfigure, canManageTeam]);
 
   // Load Config
   useEffect(() => {
@@ -807,6 +848,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     'Food & Beverage',
   ];
 
+  if (!isAuthReady || !isAuthenticated) return <div className="p-6 text-slate-700">{!isAuthReady ? 'Checking hotel access…' : 'Sign in with an authorized hotel account to continue.'}{isAuthReady && <a href="#/login" className="block text-indigo-600 mt-2">Go to login</a>}</div>;
+
   return (
     <div className="flex h-full bg-slate-50 font-sans text-slate-900">
       {/* Sidebar */}
@@ -848,6 +891,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
               </span>
             )}
           </button>
+          {canConfigure && <>
           <button
             type="button"
             onClick={() => setActiveTab('locations')}
@@ -873,11 +917,14 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
           >
             Configuration
           </button>
+          </>}
+          {canManageTeam && <button type="button" onClick={()=>setActiveTab('team')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='team'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Team Management</button>}
         </nav>
       </aside>
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden min-w-0">
+        {canManageTeam && activeTab === 'team' && <TeamManagement key={hotelId} hotelId={hotelId} />}
         {/* TAB 1: LIVE INBOX */}
         {activeTab === 'inbox' && (
           <>
@@ -1388,7 +1435,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         )}
 
         {/* TAB 3: LOCATIONS & QR CODES */}
-        {activeTab === 'locations' && (
+        {canConfigure && activeTab === 'locations' && (
           <div className="flex-1 p-8 overflow-y-auto">
             <div className="max-w-4xl space-y-6">
               <div>
@@ -1613,7 +1660,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         )}
 
         {/* TAB 4: CONFIGURATION */}
-        {activeTab === 'config' && (
+        {canConfigure && activeTab === 'config' && (
           <div className="flex-1 p-8 overflow-y-auto">
             <div className="max-w-3xl">
               <h2 className="font-display text-xl font-bold mb-1">Hotel &amp; AI Configuration</h2>
