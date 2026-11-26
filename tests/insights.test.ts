@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { estimateROI, elapsed, mean, inPeriod } from '../services/insightsMath';
+import { estimateROI, elapsed, mean, inPeriod, responseCompliance } from '../services/insightsMath';
 const t=(n:number)=>({toMillis:()=>n});
 test('ROI counts only displaced intake time and prorates expense',()=>{
  const r=estimateROI(120,2,50,24,120,30);
@@ -30,4 +30,12 @@ test('period boundaries inclusive; future and missing excluded',()=>{
  assert.equal(inPeriod(t(now-7*86400000-1),now,7),false);
  assert.equal(inPeriod(t(now+1),now,7),false);
  assert.equal(inPeriod(undefined,now,7),false);
+});
+
+test('response targets distinguish late, overdue, missing evidence and excluded departments',()=>{
+ const base={department:'Housekeeping',createdAt:t(0),status:'pending'};
+ const rows=[{...base,acknowledgedAt:t(600000)},{...base,acknowledgedAt:t(960000)},base,{...base,createdAt:t(1140000)},{...base,status:'completed'},{...base,department:'Security'},{...base,status:'cancelled'}];
+ const r=responseCompliance(rows,{housekeeping:15,maintenance:30,front_desk:5},1200000);
+ assert.deepEqual(r,{met:1,late:1,overdue:1,pending:1,unknown:1,excluded:2,rate:100/3});
+ assert.equal(responseCompliance([base],null,1200000).rate,null);
 });
