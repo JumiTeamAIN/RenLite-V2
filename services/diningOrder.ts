@@ -33,5 +33,5 @@ export function diningReply(menu:DiningMenu,text:string){
  const requested=menu.items.find(x=>x.available&&text.toLowerCase().includes(x.name.toLowerCase()));
  if(!menu.enabled)return 'Online room service ordering is not currently available. Please contact the front desk to confirm dining options. No order has been placed.';
  if(requested?.soldOut)return 'I’m sorry, '+requested.name+' is currently sold out. Please browse Dining for available alternatives. No order has been placed.';
- return 'I can help you browse our in-room dining menu. Open Dining to select how many guests are dining, choose your items and preparation options, and review your order. No order has been placed.';
+ return 'I can help you browse our in-room dining menu. Open Dining to select how many guests are dining, choose your items and preparation options, review your order, then select Confirm & Place Order to send it to the Front Desk. No order has been placed.';
 }
