@@ -116,6 +116,9 @@ test('clients cannot forge or mutate server-owned dining tickets',async()=>{
  await assertFails(setDoc(doc(guest,'hotels','ownerA','requests','dining-fake'),payload));
  await assertFails(setDoc(doc(staff,'hotels','ownerA','requests','dining-fake'),payload));
  await env.withSecurityRulesDisabled(async ctx=>{await setDoc(doc(ctx.firestore(),'hotels','ownerA','requests','dining-real'),{...payload,createdAt:Timestamp.now(),lastUpdated:Timestamp.now(),diningOrder:{subtotalCents:3600}});});
+ await env.withSecurityRulesDisabled(async ctx=>{await setDoc(doc(ctx.firestore(),'hotels','ownerA','requests','dining-legacy'),{...payload,createdAt:Timestamp.now(),lastUpdated:Timestamp.now()});});
+ await assertFails(updateDoc(doc(staff,'hotels','ownerA','requests','dining-legacy'),{status:'completed',lastUpdated:serverTimestamp()}));
+ await assertFails(updateDoc(doc(guest,'hotels','ownerA','requests','dining-legacy'),{description:'Changed',lastUpdated:serverTimestamp()}));
  await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','requests','dining-real')));
  await assertFails(updateDoc(doc(staff,'hotels','ownerA','requests','dining-real'),{status:'completed',lastUpdated:serverTimestamp()}));
  await assertFails(updateDoc(doc(guest,'hotels','ownerA','requests','dining-real'),{description:'Changed',lastUpdated:serverTimestamp()}));
