@@ -6,8 +6,11 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
  const [category,setCategory]=useState(''),[cartOpen,setCartOpen]=useState(false),[notice,setNotice]=useState('');
+ const scrollRef=useRef<HTMLDivElement>(null);
+ useEffect(()=>{if(visible)scrollRef.current?.scrollTo({top:0});},[cartOpen,category,visible]);
  const count=lines.reduce((n,l)=>n+l.quantity,0);
  const subtotal=lines.reduce((n,l)=>n+(menu.items.find(x=>x.id===l.itemId)?.priceCents||0)*l.quantity,0);
+ const hasUnavailable=lines.some(l=>!menu.items.some(x=>x.id===l.itemId&&orderable(x)));
  const categories=[...new Set(menu.items.map(x=>x.category))];
  const money=(n:number)=>menu.currency+' '+(n/100).toFixed(2);
  async function api(body:object){
@@ -17,7 +20,7 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
  }
  async function refresh(){
    const g=++generation.current;setBusy(true);setReady(false);setReview(null);setError('');
-   try{const r=await api({});if(g===generation.current){setMenu(r.menu);setRoom(r.roomNumber);setReady(true);}}
+   try{const r=await api({});if(g===generation.current){setMenu(r.menu);setRoom(r.roomNumber);setCategory(c=>r.menu.items.some((x:MenuItem)=>x.category===c)?c:'');setReady(true);}}
    catch(e){if(g===generation.current)setError(e instanceof Error?e.message:'Menu unavailable.');}
    finally{if(g===generation.current)setBusy(false);}
  }
@@ -32,7 +35,7 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
    catch(e){if(g===generation.current)setError(e instanceof Error?e.message:'Unable to review.');}
    finally{if(g===generation.current)setBusy(false);}
  }
- return <section className={visible?"flex-1 min-h-0 flex flex-col":"hidden"}><div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+ return <section className={visible?"flex-1 min-h-0 flex flex-col":"hidden"}><div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
  <h2 className="text-lg font-bold">In-room dining</h2>
  <p className="text-sm text-slate-600">Menu and order preview only. Orders are not sent to the hotel in this release. Contact staff to place your order.</p>
  {room&&<p className="text-xs text-slate-500">Current location: {room}</p>}
@@ -50,6 +53,6 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
  {review&&'subtotalCents' in review&&<div className="border rounded-xl p-4 space-y-2"><h3 className="font-bold">Order preview — not submitted</h3><p>{review.guestCount} guests · {room||'Location not confirmed'}</p>{review.lines.map((l,i)=><div key={i} className="text-sm">{l.quantity} × {l.name} — {money(l.lineTotalCents)}{l.choices.map(c=><div key={c.question} className="text-xs">{c.question}: {c.answer}</div>)}</div>)}<p className="font-bold">Subtotal: {money(review.subtotalCents)}</p><p className="text-xs">Taxes, charges, availability and delivery subject to staff confirmation. This is not an order confirmation.</p></div>}
  </div>}
  </fieldset>}
- </div>{ready&&menu.enabled&&<div className="shrink-0 border-t bg-white p-3 space-y-1"><p role="status" className="text-xs text-emerald-700 min-h-4">{notice}</p><button type="button" onClick={()=>setCartOpen(v=>!v)} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 flex justify-between font-semibold"><span>{cartOpen?"Back to menu":"View cart"} ({count})</span><span>{money(subtotal)}</span></button><p className="text-xs text-slate-500">Estimated subtotal · not submitted</p></div>}
+ </div>{ready&&menu.enabled&&<div className="shrink-0 border-t bg-white p-3 space-y-1"><p role="status" className="text-xs text-emerald-700 min-h-4">{notice}</p><button type="button" onClick={()=>setCartOpen(v=>!v)} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 flex justify-between font-semibold"><span>{cartOpen?"Back to menu":"View cart"} ({count})</span><span>{hasUnavailable?"Review items":money(subtotal)}</span></button><p className="text-xs text-slate-500">{hasUnavailable?"An item is unavailable. Review your cart.":"Estimated subtotal · not submitted"}</p></div>}
  </section>;
 }
