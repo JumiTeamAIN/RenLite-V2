@@ -71,6 +71,32 @@ export function diningReply(menu:DiningMenu,text:string){
  return 'Of course! I’d be happy to help with in-room dining. '+(categories.length?'We have '+categories.join(', ')+'. ':'')+'What are you in the mood for? You can also browse Dining and confirm your order there. No order has been placed.';
 }
 
+// An explicit simple order is usable even when the provider is unavailable.
+export function simpleDiningProposal(menu:DiningMenu,text:string):DiningProposal|null{
+ if(!menu.enabled)return null;
+ const normalized=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!]+$/,'');
+ const m=normalized.match(/^(?:i would like to order|i would like|i'd like to order|i'd like|i want to order|i want|i'll take|i'll have|can i have|please bring)\s+(?:(a|an|one|two|three|four|five|\d{1,2})\s+)?(.+?)(?:\s+please)?$/);
+ if(!m)return null;
+ const target=m[2];
+ if(/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove)\b/.test(target))return null;
+ const norm=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const singular=(s:string)=>norm(s).replace(/s$/,'');
+ const matches=menu.items.filter(x=>x.available&&(norm(x.name)===norm(target)||singular(x.name)===singular(target)||singular(x.name).endsWith(' '+singular(target))));
+ const quantity=m[1]?({a:1,an:1,one:1,two:2,three:3,four:4,five:5}[m[1]]??Number(m[1])):1;
+ if(matches.length!==1||!orderable(matches[0])||!Number.isInteger(quantity)||quantity<1||quantity>20)return null;
+ return {itemId:matches[0].id,name:matches[0].name,quantity,choices:{}};
+}
+export function nextDiningQuestion(menu:DiningMenu,p:DiningProposal){
+ const item=menu.items.find(x=>x.id===p.itemId);
+ return item?modifierGroups(item).find(g=>g.options.length&&!Object.prototype.hasOwnProperty.call(p.choices,g.id)):undefined;
+}
+export function guidedDiningReply(menu:DiningMenu,p:DiningProposal){
+ const item=menu.items.find(x=>x.id===p.itemId)!;
+ const group=nextDiningQuestion(menu,p);
+ const price=estimatedUnitCents(item,{itemId:p.itemId,quantity:p.quantity,choices:p.choices})*p.quantity;
+ return 'Certainly! '+p.quantity+' × '+item.name+' — '+menu.currency+' '+(price/100).toFixed(2)+' before any remaining extras. '+(group?group.question+' '+group.options.map(o=>o+(group.prices[o]?' (+'+menu.currency+' '+(group.prices[o]/100).toFixed(2)+')':'')).join(' / ')+'. You can reply here or choose an option below. ':'Please review and add this selection below. ' )+'No order has been placed.';
+}
+
 // Model output is a proposal, never a cart mutation or order confirmation.
 export type DiningProposal={itemId:string;name:string;quantity:number;choices:Record<string,ModifierChoice>};
 export function validateDiningProposals(menu:DiningMenu,raw:unknown):DiningProposal[]|null{
