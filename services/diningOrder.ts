@@ -75,7 +75,7 @@ export function diningReply(menu:DiningMenu,text:string){
 export function simpleDiningProposal(menu:DiningMenu,text:string):DiningProposal|null{
  if(!menu.enabled)return null;
  const normalized=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'');
- const addition=explicitAddTarget(text);
+ const addition=explicitAddTarget(text)||additionalDiningTarget(text);
  const m=(addition?'i want '+addition:normalized).match(/^(?:i would like to order|i would like|i'd like to order|i'd like|i want to order|i want|i'll take|i'll have|can i have|please bring)\s+(?:(a|an|one|two|three|four|five|\d{1,2})\s+)?(.+?)(?:\s+please)?$/);
  if(!m)return null;
  const target=m[2];
@@ -126,7 +126,7 @@ export function contextualDiningIntent(text:string,transcript:string,items:MenuI
  const t=text.toLowerCase().replace(/’/g,"'").trim();
  if(explicitLocalDiningSearch(text))return false;
  if(/\b(?:help|emergency|allerg(?:y|ic|ies|en)|chok(?:e|ing)|manager|staff|front desk|complaint|refund|towel|housekeeping|clean|repair|broken|not working|cancel|remove|change|replace|instead|no longer|don't|do not|without)\b/i.test(t))return false;
- if(explicitAddTarget(text))return true;
+ if(explicitAddTarget(text)||additionalDiningTarget(text))return true;
  if(diningIntent(text,items)==='dining')return true;
  const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  const exact=items.some(x=>orderable(x)&&(' '+normalize(text)+' ').includes(' '+normalize(x.name)+' '));
@@ -230,4 +230,37 @@ export function cartPreparationReply(menu:DiningMenu,lines:CartLine[],text:strin
    }
  }
  return hits.length===1?{kind:'choice',...hits[0]}:null;
+}
+
+
+// Recognize the intent, not a single exact sentence. Item matching remains menu-grounded.
+export function additionalDiningTarget(text:string):string|null{
+ const t=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'').trim();
+ const m=t.match(/^(?:i (?:also (?:want|would like|need)|want|would like|will have)|i'd (?:also )?like|i'll (?:also )?have|(?:can|may|could) i (?:also )?have|(?:and|also) )\s*(.+?)(?:,? (?:please|as well|too|also))?$/);
+ if(!m||!m[1]||/\b(?:and|or|with|without|not|no|except|instead|allerg\w*|cancel|remove|towels?|pillows?|blankets?|linens?|toiletries|housekeeping|staff|manager|help|nearby)\b/.test(m[1]))return null;
+ return m[1].trim();
+}
+export function missingDiningTarget(text:string):string|null{
+ const t=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'');
+ const m=t.match(/^(?:it's missing|it is missing|the (?:cart|order) is missing|you (?:forgot|missed)|(?:the )?cart doesn't have) (?:the |my )?(.+)$/);
+ return m&&m[1].length<=120?m[1].trim():null;
+}
+export function diningTargetMatches(menu:DiningMenu,target:string){
+ const n=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const q=n(target).replace(/^(?:a|an|the|one) /,'');
+ if(!q)return [];
+ const exact=menu.items.filter(x=>orderable(x)&&n(x.name)===q);
+ return exact.length?exact:menu.items.filter(x=>orderable(x)&&(' '+n(x.name)+' ').includes(' '+q+' '));
+}
+export function diningFollowup(menu:DiningMenu,lines:CartLine[],offered:string[]):{kind:string;text:string}|null{
+ const items=lines.map(l=>menu.items.find(x=>x.id===l.itemId)).filter(Boolean);
+ const beverage=(x:MenuItem)=>/beverage|drink|juice|coffee|tea/i.test(x.category);
+ const dessert=(x:MenuItem)=>/dessert|sweet/i.test(x.category);
+ if(!items.length||!items.some(x=>!beverage(x!)&&!dessert(x!)))return null;
+ for(const [kind,predicate] of [['beverage',beverage],['dessert',dessert]] as const){
+   if(offered.includes(kind)||items.some(x=>predicate(x!)))continue;
+   const choices=menu.items.filter(x=>orderable(x)&&predicate(x)&&!lines.some(l=>l.itemId===x.id)).slice(0,3);
+   if(choices.length)return {kind,text:'Would you like '+(kind==='beverage'?'a beverage':'dessert')+' with that? We have '+choices.map(x=>x.name+' ('+menu.currency+' '+((x.priceCents??0)/100).toFixed(2)+')').join(', ')+'.'};
+ }
+ return null;
 }
