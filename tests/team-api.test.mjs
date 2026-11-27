@@ -85,6 +85,35 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     // Clean up assistance events to avoid affecting later aggregate assertions.
     for(const id of ['faq','unknown'])await outageHotel.collection('assistanceEvents').doc(createHash('sha256').update('outage-session|'+id).digest('hex')).delete();
     assert.equal((await policyCall(dev,'model-policy',initial.data.policy)).status,200);
+    // Safety detection is independent of provider and preserves staff ownership.
+    const safetySession=outageHotel.collection('sessions').doc('safety-session');
+    await safetySession.set({guestUid:outageGuest.uid,status:'awaiting_human',roomNumber:'101',guestAccessStartedAt:Timestamp.now()});
+    await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false});
+    async function safetyCall(account,id){
+      const response=await fetch(base+'/api/guest/safety-check',{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({hotelId:owner.uid,sessionId:'safety-session',guestMessageId:id})});
+      return {status:response.status,data:await response.json()};
+    }
+    async function safetyMessage(id,text){await safetySession.collection('messages').doc(id).set({sender:'guest',guestUid:outageGuest.uid,text,timestamp:Timestamp.now()});}
+    await safetyMessage('bedbugs','I found bed bugs in my room.');
+    assert.equal((await safetyCall(other,'bedbugs')).status,403);
+    const safety=await safetyCall(outageGuest,'bedbugs');
+    assert.equal(safety.status,200);assert.equal(safety.data.triggered,true);
+    assert.equal((await safetySession.get()).data().status,'escalated');
+    assert.equal((await safetyCall(outageGuest,'bedbugs')).data.referenceCode,safety.data.referenceCode);
+    assert.equal((await outageHotel.collection('requests').where('sessionId','==','safety-session').get()).size,1);
+    await safetySession.update({status:'staff_controlled'});
+    await safetyMessage('fire','There is a fire in my room.');
+    assert.equal((await safetyCall(outageGuest,'fire')).status,200);
+    assert.equal((await safetySession.get()).data().status,'staff_controlled');
+    assert.equal((await safetySession.get()).data().escalationSeverity,'critical');
+    await safetyMessage('manager','I want a manager.');
+    assert.equal((await safetyCall(outageGuest,'manager')).status,200);
+    assert.equal((await safetySession.get()).data().escalationSeverity,'critical');
+    await safetyMessage('ordinary','Thanks for the towels.');
+    assert.equal((await safetyCall(outageGuest,'ordinary')).data.triggered,false);
+    await safetySession.update({guestEndedAt:Timestamp.now()});
+    assert.equal((await safetyCall(outageGuest,'fire')).status,403);
+    await policyCall(dev,'model-policy',initial.data.policy);
     const payload={hotelId:owner.uid,email:agent.email,role:'associate',department:'Front Desk'};
     assert.equal((await call(other,'invitations',payload)).status,403);
     assert.equal((await call(unverified,'invitations',payload)).status,401);
