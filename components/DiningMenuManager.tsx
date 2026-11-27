@@ -1,18 +1,62 @@
 import React,{useState,useEffect,useRef} from 'react';
 import {auth} from '../services/firebase';
-import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,appendMenuDraft,type DiningMenu,type MenuItem} from '../services/diningMenu';
+import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,appendMenuDraft,parseModifierSuggestions,type ModifierSuggestion,type DiningMenu,type MenuItem} from '../services/diningMenu';
 import {menuSource} from '../services/menuDocument';
 export function DiningMenuManager({hotelId}:{hotelId:string}){
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[version,setVersion]=useState(0),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[feedback,setFeedback]=useState(''),[dirty,setDirty]=useState(false);
  const fileRef=useRef<HTMLInputElement>(null),cameraRef=useRef<HTMLInputElement>(null);
  const generation=useRef(0);
+ const [suggestions,setSuggestions]=useState<Record<string,{source:string;groups:ModifierSuggestion[]}>>({});
+ const [draftPrices,setDraftPrices]=useState<Record<string,string>>({});
+ const sourceKey=(x:MenuItem)=>JSON.stringify([x.name,x.category,x.description]);
+ async function suggest(x:MenuItem){
+   if(busy||!ready||!x.name.trim())return;
+   const g=generation.current;setBusy(true);setFeedback('');
+   try{
+     const response=await api('suggest-modifiers',{name:x.name,category:x.category,description:x.description});
+     const groups=parseModifierSuggestions(response.suggestions);
+     if(!groups)throw Error('Invalid suggestions.');
+     if(g===generation.current){
+       setSuggestions(prev=>({...prev,[x.id]:{source:sourceKey(x),groups}}));
+       setDraftPrices(prev=>Object.fromEntries(Object.entries(prev).filter(([k])=>!k.startsWith(x.id+':'))));
+       setFeedback(groups.length?'Review suggested choices and enter confirmed prices (including 0 for included options). Suggestions are not published.':'No suggestions returned. You can still add choice groups manually.');
+     }
+   }catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Suggestions unavailable.');}
+   finally{if(g===generation.current)setBusy(false);}
+ }
+ const dismiss=(id:string,index:number)=>setSuggestions(prev=>({...prev,[id]:{...prev[id],groups:prev[id].groups.filter((_,i)=>i!==index)}}));
+ function accept(x:MenuItem,index:number){
+   const pending=suggestions[x.id],group=pending?.groups[index];
+   if(!group||pending.source!==sourceKey(x)||(x.modifierGroups||[]).length>=10)return;
+   const values=group.options.map((_,i)=>draftPrices[x.id+':'+index+':'+i]??'');
+   if(values.some(v=>!/^\\d{1,5}(?:\\.\\d{1,2})?$/.test(v)||Number(v)>10000)){setFeedback('Enter a verified additional price for every option, including 0 if included.');return;}
+   const norm=(s:string)=>s.trim().toLowerCase();
+   if((x.modifierGroups||[]).some(g=>norm(g.question)===norm(group.question))||x.modifiers.some(m=>norm(m.split('|')[0])===norm(group.question))){setFeedback('A choice group with this question already exists. Edit the existing group instead.');return;}
+   if(!window.confirm('Confirm the kitchen offers these options, the required/optional setting is correct, and all additional prices are verified. Add to unsaved menu?'))return;
+   item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:group.question,required:group.required,options:group.options.map((label,i)=>({label,priceCents:Math.round(Number(values[i])*100)}))}]});
+   clearSuggestion(x.id,index);
+   setFeedback('Choice group added to the unsaved menu. Edit as needed, then Save menu to publish.');
+ }
+ function clearSuggestion(id:string,index:number){
+   // Keep remaining groups and their price fields aligned after removing a draft.
+   dismiss(id,index);
+   setDraftPrices(prev=>{
+     const next:Record<string,string>={};
+     for(const [k,v] of Object.entries(prev)){
+       if(!k.startsWith(id+':')){next[k]=v;continue;}
+       const [gi,oi]=k.slice(id.length+1).split(':').map(Number);
+       if(gi!==index)next[id+':'+(gi>index?gi-1:gi)+':'+oi]=v;
+     }
+     return next;
+   });
+ }
  async function api(route:string,body?:unknown){
    const user=auth.currentUser;if(!user)throw Error('Sign in again.');
    const r=await fetch('/api/dining/'+route+'/'+encodeURIComponent(hotelId),{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+await user.getIdToken(),'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(45000)});
    const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Request failed.');return data;
  }
  async function load(){
-   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');
+   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');setSuggestions({});setDraftPrices({});
    try{const r=await api('menu');const m=parseDiningMenu(r.menu);if(!m)throw Error('Invalid saved menu.');if(g===generation.current){setMenu(m);setVersion(r.version);setDirty(false);setReady(true);}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Could not load menu.');}
    finally{if(g===generation.current)setBusy(false);}
@@ -65,6 +109,16 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      <label className="block text-sm">Description<textarea className={input} value={x.description} maxLength={500} onChange={e=>item(x.id,{description:e.target.value})}/></label>
      <label className="block text-sm">Hotel-verified allergen information (unknown if blank)<input className={input} value={x.allergens} maxLength={300} onChange={e=>item(x.id,{allergens:e.target.value})}/></label>
      <label className="block text-sm">Required preparation choices (one group per line: question | option | option)<textarea className={input} placeholder={'Cooking temperature | Medium rare | Medium | Medium well | Well done'} value={x.modifiers.join('\n')} onChange={e=>item(x.id,{modifiers:e.target.value.split('\n').slice(0,10)})}/></label>
+     <div className="border border-indigo-200 rounded-lg p-3 space-y-3">
+       <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">AI-assisted preparation and add-ons</strong><button type="button" disabled={!x.name.trim()||busy} className="border rounded px-3 py-2 text-sm text-indigo-700 disabled:opacity-50" onClick={()=>void suggest(x)}>Suggest customization options</button></div>
+       <p className="text-xs text-slate-600">AI suggestions are not verified kitchen offerings. Review and approve each group, confirm all additional prices, and save the menu before guests see them. One AI request per item.</p>
+       {suggestions[x.id]&&suggestions[x.id].source!==sourceKey(x)&&<p className="text-xs text-amber-700">Item details changed. Generate fresh suggestions.</p>}
+       {suggestions[x.id]?.source===sourceKey(x)&&suggestions[x.id].groups.map((g,gi)=><div key={gi} className="border rounded p-3 space-y-2">
+         <p className="font-medium text-sm">{g.question} <span className="text-xs text-slate-500">({g.required?'Suggested required':'Suggested optional'})</span></p>
+         {g.options.map((option,oi)=><div key={oi} className="flex items-center gap-2"><span className="flex-1 text-sm">{option}</span><label className="w-36 text-xs">Extra ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" placeholder="Verify price" value={draftPrices[x.id+':'+gi+':'+oi]??''} onChange={e=>setDraftPrices(p=>({...p,[x.id+':'+gi+':'+oi]:e.target.value}))}/></label></div>)}
+         <div className="flex gap-2"><button type="button" className="bg-indigo-600 text-white rounded px-3 py-2 text-sm" onClick={()=>accept(x,gi)}>Approve group</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>clearSuggestion(x.id,gi)}>Dismiss</button></div>
+       </div>)}
+     </div>
      <div className="border rounded-lg p-3 space-y-3">
        <div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">Custom preparation and add-ons</strong><button type="button" disabled={(x.modifierGroups||[]).length>=10} className="border rounded px-2 py-1 text-xs" onClick={()=>item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:'',required:false,options:[{label:'',priceCents:0}]}]})}>Add choice group</button></div>
        <p className="text-xs text-slate-600">One selection per group. Use separate optional groups for extras that can be combined. Prices are additional per item.</p>
