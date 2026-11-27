@@ -97,3 +97,18 @@ test('Excel FAQ extraction reads question and answer columns',async()=>{
  const pairs=await extractFaqFile(new File([new Uint8Array(bytes)],'FAQ.xlsx'));
  assert.deepEqual(pairs,[{question:'Parking?',answer:'$15 plus tax'}]);
 });
+
+import {compareRequests,outstandingPriorities,compareSessions,newUrgentIds} from '../services/priorityOperations.ts';
+test('priority operations keep unresolved urgent requests ahead of newer routine requests and completed history',()=>{
+ const make=(id:string,priority:string,status:string,time:number,sessionId='s')=>({id,priority,status,sessionId,createdAt:{toMillis:()=>time}} as any);
+ const records=[make('normal','normal','pending',1),make('high-new','high','pending',8),make('urgent-done','urgent','completed',9),make('urgent','urgent','in_progress',7),make('high-old','high','acknowledged',2),make('cancelled','urgent','cancelled',10)];
+ assert.deepEqual([...records].sort(compareRequests).map(r=>r.id),['urgent','high-old','high-new','normal','cancelled','urgent-done']);
+ assert.equal(outstandingPriorities(records).get('s'),2);
+ assert.equal(outstandingPriorities(records.filter(r=>r.id!=='urgent')).get('s'),1);
+ assert.deepEqual(newUrgentIds(new Set(['urgent']),records),[]);
+ assert.deepEqual(newUrgentIds(new Set(),records),['urgent']);
+ const read={id:'s',status:'staff_controlled',isUnread:false,lastUpdatedAt:{toMillis:()=>1}} as any;
+ const recent={id:'other',status:'active',isUnread:true,lastUpdatedAt:{toMillis:()=>99}} as any;
+ assert.ok(compareSessions(read,recent,outstandingPriorities(records))<0);
+ assert.ok(compareSessions(read,recent,outstandingPriorities([]))>0);
+});
