@@ -21,6 +21,19 @@ jobs:
           java-version: '21'
       - run: npm install --no-audit --no-fund
       - run: npm run build
+      - name: Native Node production startup smoke test
+        run: |
+          NODE_ENV=production PORT=19388 npm start > /tmp/renlite-startup.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat /tmp/renlite-startup.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19388/healthz | grep -q '"ok":true'; then
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then exit 1; fi
+            sleep 1
+          done
+          exit 1
       - run: npx tsx --test tests/insights.test.ts
       - run: npm install --no-save --package-lock=false @firebase/rules-unit-testing@5 firebase-tools@14
       - run: npx firebase emulators:exec --config firebase.test.json --project demo-renlite-test --only firestore,auth "node --test --test-concurrency=1 tests/hotel-access.test.mjs tests/team-api.test.mjs"
