@@ -1,3 +1,4 @@
+import {GuestDining} from './GuestDining';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -92,7 +93,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const [messages, setMessages] = useState<Message[]>([]);
   const [guestRequests, setGuestRequests] = useState<Request[]>([]);
 
-  const [activeView, setActiveView] = useState<'chat' | 'quick' | 'requests'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'quick' | 'requests' | 'dining'>('chat');
   const [inputText, setInputText] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
@@ -762,7 +763,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         )}
 
         {/* Segmented Companion Tabs */}
-        <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 rounded-lg mt-2.5">
+        <div className="grid grid-cols-4 gap-1 p-1 bg-slate-100 rounded-lg mt-2.5">
           <button
             type="button"
             onClick={() => setActiveView('chat')}
@@ -796,10 +797,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           >
             My Requests ({openRequestsCount})
           </button>
+          <button type="button" onClick={()=>setActiveView('dining')} className={`min-h-[36px] px-2 py-1.5 text-xs font-medium rounded-md ${activeView==='dining'?'bg-white text-slate-900 shadow-sm':'text-slate-600'}`}>Dining</button>
         </div>
       </header>
 
       {/* VIEW 1: CHAT */}
+      {activeView==='dining'&&sessionId&&<GuestDining key={sessionId} hotelId={hotelId} sessionId={sessionId}/>}
+
       {activeView === 'chat' && (
         <>
           <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
