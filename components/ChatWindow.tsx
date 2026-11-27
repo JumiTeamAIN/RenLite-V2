@@ -1,5 +1,5 @@
 import {GuestDining,type GuestDiningHandle,type ChatDiningItem,type ChatCartSnapshot} from './GuestDining';
-import {parseCartCommand,explicitAddTarget,preparationReply,type CartCommand,selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
+import {parseCartCommand,explicitAddTarget,additionalDiningTarget,missingDiningTarget,preparationReply,type CartCommand,selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -101,15 +101,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const [diningChatNotice,setDiningChatNotice]=useState('');
   const [cartSnapshot,setCartSnapshot]=useState<ChatCartSnapshot|null>(null);
   const [chatCartOpen,setChatCartOpen]=useState(false);
+  const offerActive=useRef(false);
+  function nextOffer(){const prompt=diningRef.current?.nextChatOffer()||'';offerActive.current=Boolean(prompt);return prompt? ' '+prompt:'';}
   const [diningChatBusy,setDiningChatBusy]=useState(false);
   const diningScope=hotelId+':'+sessionId;
   const diningScopeRef=useRef(diningScope);
   diningScopeRef.current=diningScope;
   const diningActionBusy=useRef(false);
-  useEffect(()=>{setDiningSuggestion([]);setDiningChatNotice('');setChatCartOpen(false);},[diningScope]);
+  useEffect(()=>{setDiningSuggestion([]);setDiningChatNotice('');setChatCartOpen(false);offerActive.current=false;},[diningScope]);
   const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,ModifierChoice>;step:number;quantity:number}|null>(null);
   useEffect(()=>{setCustomizing(null);},[diningScope]);
-  function clearDiningChat(){setDiningSuggestion([]);setDiningChatNotice('');setCustomizing(null);}
+  function clearDiningChat(){offerActive.current=false;setDiningSuggestion([]);setDiningChatNotice('');setCustomizing(null);}
   async function runCartCommand(command:CartCommand){
     if(!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
     if(command.kind==='review'&&(customizing||diningSuggestion.length)){setDiningChatNotice('Finish or dismiss your pending menu selections before reviewing the order.');return;}
@@ -131,7 +133,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       if(step>=0){setCustomizing({item,scope:diningScope,choices,step,quantity:diningSuggestion.quantity});setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       else {
         const name=await diningRef.current.addCustomizedFromChat(item,choices,diningSuggestion.quantity);
-        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.');setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
+        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.'+(diningSuggestion.quantity&&diningSuggestion.scope===diningScope&&index===0?nextOffer():''));setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       }
     }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
@@ -146,7 +148,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
     try{
       const name=await diningRef.current.addCustomizedFromChat(customizing.item,choices,customizing.quantity);
-      if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(name+' added to your cart.');}
+      if(diningScopeRef.current===diningScope){setCustomizing(null);setChatCartOpen(true);setDiningChatNotice(name+' added to your cart.'+nextOffer());}
     }catch(e){if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
   }
@@ -481,13 +483,19 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           return;
         }
       }
+      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&cartSnapshot?.count&&missingDiningTarget(text)){
+        try{const message=await diningRef.current.tryMissingItem(text);if(diningScopeRef.current===diningScope){setChatCartOpen(true);setDiningChatNotice(message);offerActive.current=false;}}
+        catch(e){setDiningChatNotice(e instanceof Error?e.message:'Could not check the missing item.');}return;
+      }
+      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&cartSnapshot?.count&&/^continue without it[.!]?$/i.test(text.trim())){setDiningChatNotice(diningRef.current.dismissMissingItem());return;}
+      if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&offerActive.current&&/^(?:no|no thanks|no thank you|not now)[.!]?$/i.test(text.trim())){setDiningChatNotice('Of course.'+nextOffer());return;}
       // Explicit add commands are grounded in the fresh menu, not the generic model.
       // Keep a pending preparation question active when the guest adds a beverage.
-      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&(customizing||cartSnapshot?.count||diningSuggestion.length||chatCartOpen)&&explicitAddTarget(text)){
+      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&(customizing||cartSnapshot?.count||diningSuggestion.length||chatCartOpen)&&(explicitAddTarget(text)||additionalDiningTarget(text)||offerActive.current)){
         try{
-          const message=await diningRef.current.tryExplicitAdd(text);
-          if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message);setChatCartOpen(true);}return;}
-          if(customizing){setDiningChatNotice('Please finish the current preparation selection first, then add the next item. Nothing else has been added.');return;}
+          const message=await diningRef.current.tryExplicitAdd(text,offerActive.current&&!customizing);
+          if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message+(customizing?'':nextOffer()));setChatCartOpen(true);}return;}
+          if(customizing&&(explicitAddTarget(text)||additionalDiningTarget(text))){setDiningChatNotice('Please finish the current preparation selection first, then add the next item. Nothing else has been added.');return;}
         }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add that item. Nothing was confirmed.');return;}
       }
       if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&diningRef.current){
@@ -1062,7 +1070,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                 {cartSnapshot.error&&<p className="text-red-700">{cartSnapshot.error}</p>}
               </>}
             </div>:null}
-            {diningChatNotice&&<div role="status" className="mb-2 text-xs text-slate-700">{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
+            {diningChatNotice&&<div role="status" className="mb-2 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700"><div className="text-xs font-medium text-slate-500 mb-1">Ren Concierge</div>{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
             {session?.status === 'staff_controlled' && (
               <div className="text-[11px] text-slate-500 mb-2 px-1">
                 Direct staff chat is active — a hotel associate is replying here.
