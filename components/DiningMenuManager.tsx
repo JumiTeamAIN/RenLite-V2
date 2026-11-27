@@ -8,6 +8,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  const generation=useRef(0);
  const [suggestions,setSuggestions]=useState<Record<string,{source:string;groups:ModifierSuggestion[]}>>({});
  const [draftPrices,setDraftPrices]=useState<Record<string,string>>({});
+ const [approvalFeedback,setApprovalFeedback]=useState<Record<string,string>>({});
  const sourceKey=(x:MenuItem)=>JSON.stringify([x.name,x.category,x.description]);
  const [localDismissed,setLocalDismissed]=useState<Record<string,boolean>>({});
  const localKey=(x:MenuItem,g:LocalModifierDraft)=>JSON.stringify([x.id,sourceKey(x),g.question,g.options]);
@@ -38,14 +39,16 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  const dismiss=(id:string,index:number)=>setSuggestions(prev=>({...prev,[id]:{...prev[id],groups:prev[id].groups.filter((_,i)=>i!==index)}}));
  function accept(x:MenuItem,index:number){
    const pending=suggestions[x.id],group=pending?.groups[index];
-   if(!group||pending.source!==sourceKey(x)||(x.modifierGroups||[]).length>=10)return;
+   if(!group||pending.source!==sourceKey(x))return;
+   if((x.modifierGroups||[]).length>=10){setApprovalFeedback(p=>({...p,[x.id]:'Maximum 10 custom groups reached. Remove a group first.'}));return;}
    const values=group.options.map((_,i)=>draftPrices[x.id+':'+index+':'+i]??'');
-   if(values.some(v=>verifiedModifierPrice(v)===null)){setFeedback('Enter a verified additional price for every option, including 0 if included.');return;}
+   if(values.some(v=>verifiedModifierPrice(v)===null)){setApprovalFeedback(p=>({...p,[x.id]:'Enter a verified extra price for every option, or use Set all to 0 if every option is included.'}));return;}
    const norm=(s:string)=>s.trim().toLowerCase();
-   if((x.modifierGroups||[]).some(g=>norm(g.question)===norm(group.question))||x.modifiers.some(m=>norm(m.split('|')[0])===norm(group.question))){setFeedback('A choice group with this question already exists. Edit the existing group instead.');return;}
+   if((x.modifierGroups||[]).some(g=>norm(g.question)===norm(group.question))||x.modifiers.some(m=>norm(m.split('|')[0])===norm(group.question))){setApprovalFeedback(p=>({...p,[x.id]:'A group with this question already exists. Edit the existing group below.'}));return;}
    if(!window.confirm('Confirm the kitchen offers these options, the required/optional setting is correct, and all additional prices are verified. Add to unsaved menu?'))return;
    item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:group.question,required:group.required,options:group.options.map((label,i)=>({label,priceCents:verifiedModifierPrice(values[i])!}))}]});
    clearSuggestion(x.id,index);
+   setApprovalFeedback(p=>({...p,[x.id]:'Approved and added below. Save menu to make these choices available to guests.'}));
    setFeedback('Choice group added to the unsaved menu. Edit as needed, then Save menu to publish.');
  }
  function clearSuggestion(id:string,index:number){
@@ -67,7 +70,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
    const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Request failed.');return data;
  }
  async function load(){
-   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');setSuggestions({});setDraftPrices({});setLocalDismissed({});
+   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');setSuggestions({});setDraftPrices({});setLocalDismissed({});setApprovalFeedback({});
    try{const r=await api('menu');const m=parseDiningMenu(r.menu);if(!m)throw Error('Invalid saved menu.');if(g===generation.current){setMenu(m);setVersion(r.version);setDirty(false);setReady(true);}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Could not load menu.');}
    finally{if(g===generation.current)setBusy(false);}
@@ -96,7 +99,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  async function save(){
    const valid=parseDiningMenu(menu);if(!valid){setFeedback('Review missing names, prices, duplicate items, currency and modifiers. Enable at least one priced item before enabling dining.');return;}
    const g=generation.current;setBusy(true);setFeedback('');
-   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setFeedback('Menu saved. Guest ordering is available when enabled.');}}
+   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setApprovalFeedback({});setFeedback('Menu saved. Guest ordering is available when enabled.');}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Save failed.');}
    finally{if(g===generation.current)setBusy(false);}
  }
@@ -131,12 +134,13 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      </div>}
      <div className="border border-indigo-200 rounded-lg p-3 space-y-3">
        <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">AI-assisted preparation and add-ons</strong><button type="button" disabled={!x.name.trim()||busy} className="border rounded px-3 py-2 text-sm text-indigo-700 disabled:opacity-50" onClick={()=>void suggest(x)}>Suggest customization options</button></div>
+       {approvalFeedback[x.id]&&<p role="status" className="border border-indigo-200 rounded p-2 text-sm bg-indigo-50">{approvalFeedback[x.id]}</p>}
        <p className="text-xs text-slate-600">AI suggestions are not verified kitchen offerings. Review and approve each group, confirm all additional prices, and save the menu before guests see them. One AI request per item.</p>
        {suggestions[x.id]&&suggestions[x.id].source!==sourceKey(x)&&<p className="text-xs text-amber-700">Item details changed. Generate fresh suggestions.</p>}
        {suggestions[x.id]?.source===sourceKey(x)&&suggestions[x.id].groups.map((g,gi)=><div key={gi} className="border rounded p-3 space-y-2">
          <p className="font-medium text-sm">{g.question} <span className="text-xs text-slate-500">({g.required?'Suggested required':'Suggested optional'})</span></p>
          {g.options.map((option,oi)=><div key={oi} className="flex items-center gap-2"><span className="flex-1 text-sm">{option}</span><label className="w-36 text-xs">Extra ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" placeholder="Verify price" value={draftPrices[x.id+':'+gi+':'+oi]??''} onChange={e=>setDraftPrices(p=>({...p,[x.id+':'+gi+':'+oi]:e.target.value}))}/></label></div>)}
-         <div className="flex gap-2"><button type="button" className="bg-indigo-600 text-white rounded px-3 py-2 text-sm" onClick={()=>accept(x,gi)}>Approve group</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>clearSuggestion(x.id,gi)}>Dismiss</button></div>
+         <div className="flex flex-wrap gap-2"><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>{setDraftPrices(p=>({...p,...Object.fromEntries(g.options.map((_,oi)=>[x.id+':'+gi+':'+oi,'0']))}));setApprovalFeedback(p=>({...p,[x.id]:'All extra prices set to 0. Verify these choices are included before approving.'}));}}>Set all to 0 (included)</button><button type="button" className="bg-indigo-600 text-white rounded px-3 py-2 text-sm" onClick={()=>accept(x,gi)}>Approve group</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>clearSuggestion(x.id,gi)}>Dismiss</button></div>
        </div>)}
      </div>
      <div className="border rounded-lg p-3 space-y-3">
@@ -156,7 +160,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      <label className="block text-sm">Suggested upsell items<select multiple className={input} value={x.upsells} onChange={e=>item(x.id,{upsells:Array.from(e.target.selectedOptions,o=>o.value).slice(0,10)})}>{menu.items.filter(y=>y.id!==x.id&&y.name).map(y=><option key={y.id} value={y.id}>{y.name}</option>)}</select></label>
      <label className="text-sm"><input type="checkbox" disabled={x.priceCents===null} checked={x.available} onChange={e=>item(x.id,{available:e.target.checked})}/> Approved for guest menu</label>
    </div>)}
-   <button type="button" disabled={!dirty||busy} onClick={()=>void save()} className="bg-indigo-600 text-white px-5 py-3 rounded-lg font-semibold disabled:opacity-50">{busy?'Working…':'Save menu'}</button>{dirty&&<span className="ml-3 text-sm text-amber-700">Unsaved changes</span>}
+   <div className="sticky bottom-0 bg-white border-t p-3 shadow-sm flex flex-wrap items-center gap-2"><button type="button" disabled={!dirty||busy} onClick={()=>void save()} className="bg-indigo-600 text-white px-5 py-3 rounded-lg font-semibold disabled:opacity-50">{busy?'Working…':'Save menu'}</button>{dirty&&<span className="ml-3 text-sm text-amber-700">Unsaved changes — guests cannot see them until saved.</span>}</div>
    </fieldset>}
  </div></section>;
 }
