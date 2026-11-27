@@ -453,6 +453,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         }
         return;
       }
+      if (!isStaffControlled && customizing?.scope===diningScope) {
+        const group=customizing.item.groups[customizing.step];
+        const normalized=text.toLowerCase().trim().replace(/[.!?]+$/,'').trim();
+        const choice=group.options.find(o=>o.toLowerCase().trim()===normalized);
+        const skip=!group.required&&/^(no|no thanks|no thank you|none|skip)$/.test(normalized);
+        if(choice||skip){
+          await chooseDiningOption(choice||'');
+          return;
+        }
+      }
       if (!isStaffControlled) {
         const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
         if(suggestion&&diningScopeRef.current===diningScope)setDiningSuggestion({...suggestion,scope:diningScope});
