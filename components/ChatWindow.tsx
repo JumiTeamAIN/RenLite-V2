@@ -471,7 +471,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         }
         return;
       }
-      const cartCommand=parseCartCommand(text);
+      const cartCommand=/\b(?:and (?:add|remove|change|make|give|bring|also)|then (?:add|remove|change|make)|also (?:add|remove|change))\b/i.test(text)?null:parseCartCommand(text);
       if(!isStaffControlled&&!wasCompleted&&cartCommand&&(chatCartOpen||cartSnapshot?.count||cartSnapshot?.uncertain||cartCommand.kind==='show'||cartCommand.kind==='review'||cartCommand.kind==='confirm')){
         await runCartCommand(cartCommand);return;
       }
