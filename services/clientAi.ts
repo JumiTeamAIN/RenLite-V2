@@ -76,7 +76,8 @@ export async function translateText(
     }
   };
 
-  let res = await callApi(false);
+  let res:Response;
+  try{res=await callApi(false);}catch(err){translationBackoffUntil=Date.now()+300_000;throw err;}
   if (res.status === 401 && auth.currentUser) {
     res = await callApi(true);
   }
@@ -86,7 +87,7 @@ export async function translateText(
     error?: string;
   };
   if (!res.ok) {
-    if (res.status === 429 || res.status === 503) {
+    if (res.status === 429 || res.status >= 500) {
       translationBackoffUntil = Date.now() + 300_000;
     }
     throw new Error(data?.error || `Translation failed (${res.status})`);
@@ -245,7 +246,7 @@ export const sendMessageToAI = async (
     if (!sessionData) throw new Error('Conversation not found');
 
     // Explicit Human Takeover / Completed Gate: never call AI while staff controls the chat
-    if (sessionData?.status === 'staff_controlled' || sessionData?.status === 'completed') {
+    if (['staff_controlled','completed','awaiting_human'].includes(sessionData.status)) {
       return;
     }
 
@@ -344,7 +345,7 @@ export const sendMessageToAI = async (
     if(currentRoomSession.roomMoveAt?.toMillis()!==sessionData.roomMoveAt?.toMillis()){
       throw Error('Room changed while Ren was responding. Please use Quick Request or contact staff.');
     }
-    if(['staff_controlled','completed'].includes(currentRoomSession.status))return;
+    if(['staff_controlled','completed','awaiting_human'].includes(currentRoomSession.status))return;
     sessionData=currentRoomSession;
 
     let responseText: string = (
@@ -491,7 +492,7 @@ export const sendMessageToAI = async (
     await runTransaction(db, async (tx) => {
       const current = await tx.get(sessionRef);
       const existingReply = await tx.get(replyRef);
-      if (!current.exists() || existingReply.exists() || ['staff_controlled', 'completed'].includes(current.data().status)) return;
+      if (!current.exists() || existingReply.exists() || ['staff_controlled', 'completed','awaiting_human'].includes(current.data().status)) return;
       tx.set(replyRef, {
       sender: 'ai',
       ...(guestUid ? { guestUid } : {}),
@@ -593,16 +594,9 @@ export const sendMessageToAI = async (
       }
     }
 
-    const rawErr = error instanceof Error && error.message ? error.message : '';
-    const isActionableConfigErr =
-      rawErr.includes('Settings > Secrets') ||
-      rawErr.includes('Authentication') ||
-      rawErr.includes('authentication token');
-
-    const fallbackMsg = !isActionableConfigErr && rawErr.includes('Rate limit')
-        ? 'Ren AI is momentarily busy, but your message was saved for our hotel team. Please try again in a moment, or use Quick Request above or tap Speak with Staff.'
-        : 'Ren AI is temporarily unavailable, but your message was saved for our hotel team. You can use Quick Request above or tap Speak with Staff for immediate help.';
-
+    const fallbackMsg = safetySignal.triggered
+      ? 'I could not confirm an urgent alert. If you are in immediate danger, contact local emergency services now. Please contact the hotel front desk directly. Your message is saved in the staff inbox.'
+      : 'Ren AI is temporarily unavailable. Your message is saved in the hotel team’s inbox for review. No new service request is confirmed by this message. Use Quick Request to submit an item directly, or contact the front desk if you need urgent help.';
     try {
       const sessionRef = doc(db, sessionPath);
       const replyRef = latestGuestMessageId ? doc(collection(db, msgsPath), `ai-${latestGuestMessageId}`) : doc(collection(db, msgsPath));
@@ -610,6 +604,13 @@ export const sendMessageToAI = async (
         const current = await tx.get(sessionRef);
         const reply = await tx.get(replyRef);
         if (!current.exists() || reply.exists() || ['staff_controlled', 'completed'].includes(current.data().status)) return;
+        tx.update(sessionRef, {
+          lastUpdatedAt: serverTimestamp(),
+          previewText: lastGuestText.slice(0,5000) || 'Guest needs assistance',
+          previewStaffText: lastGuestText.slice(0,5000) || 'Guest needs assistance',
+          isUnread: true,
+          ...(current.data().status === 'escalated' ? {} : {status:'awaiting_human'}),
+        });
         tx.set(replyRef, {
           sender: 'ai',
           ...(guestUid ? { guestUid } : {}),

@@ -11,6 +11,7 @@ import {
   getDoc,
   updateDoc,
   writeBatch,
+  runTransaction,
 } from 'firebase/firestore';
 import { auth, db, signInGuest, OperationType, handleFirestoreError } from '../services/firebase';
 import { sendMessageToAI, translateMessageToEnglish } from '../services/clientAi';
@@ -369,7 +370,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     setChatError(null);
     setPendingGuestMessages((prev) => [...prev, { localId, text }]);
 
-    const isStaffControlled = session?.status === 'staff_controlled';
+    const isStaffControlled = session?.status === 'staff_controlled' || session?.status === 'awaiting_human';
     const wasCompleted = session?.status === 'completed';
     if (!isStaffControlled) {
       setIsThinking(true);
@@ -527,19 +528,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const msgsPath = `hotels/${hotelId}/sessions/${sessionId}/messages`;
 
     try {
-      if (session?.status !== 'completed') {
-        await updateDoc(doc(db, sessionPath), {
-          lastUpdatedAt: serverTimestamp(),
-          previewText: 'Guest requested a hotel associate',
-          isUnread: true,
-          status: 'awaiting_human',
-        });
-      }
-      await addDoc(collection(db, msgsPath), {
-        sender: 'system',
-        guestUid,
-        text: 'You requested assistance from a hotel associate. Our team has been notified and will reply here shortly.',
-        timestamp: serverTimestamp(),
+      const sessionRef=doc(db,sessionPath);
+      const notice=doc(collection(db,msgsPath));
+      await runTransaction(db,async tx=>{
+        const current=await tx.get(sessionRef);
+        if(!current.exists()||['staff_controlled','completed','awaiting_human','escalated'].includes(current.data().status))return;
+        tx.update(sessionRef,{lastUpdatedAt:serverTimestamp(),previewText:'Guest requested a hotel associate',isUnread:true,status:'awaiting_human'});
+        tx.set(notice,{sender:'system',guestUid,text:'Your request for a hotel associate is in the staff inbox. For urgent help, contact the front desk directly.',timestamp:serverTimestamp()});
       });
       setActiveView('chat');
     } catch (err) {
