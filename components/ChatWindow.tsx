@@ -802,7 +802,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       </header>
 
       {/* VIEW 1: CHAT */}
-      {activeView==='dining'&&sessionId&&<GuestDining key={sessionId} hotelId={hotelId} sessionId={sessionId}/>}
+      {sessionId&&<GuestDining key={sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'}/>}
 
       {activeView === 'chat' && (
         <>
