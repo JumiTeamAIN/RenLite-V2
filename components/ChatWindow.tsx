@@ -1,5 +1,5 @@
-import {GuestDining,type GuestDiningHandle,type ChatDiningItem} from './GuestDining';
-import {selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
+import {GuestDining,type GuestDiningHandle,type ChatDiningItem,type ChatCartSnapshot} from './GuestDining';
+import {parseCartCommand,type CartCommand,selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -99,15 +99,26 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const diningRef=useRef<GuestDiningHandle>(null);
   const [diningSuggestion,setDiningSuggestion]=useState<(DiningSuggestion & {scope:string})[]>([]);
   const [diningChatNotice,setDiningChatNotice]=useState('');
+  const [cartSnapshot,setCartSnapshot]=useState<ChatCartSnapshot|null>(null);
+  const [chatCartOpen,setChatCartOpen]=useState(false);
   const [diningChatBusy,setDiningChatBusy]=useState(false);
   const diningScope=hotelId+':'+sessionId;
   const diningScopeRef=useRef(diningScope);
   diningScopeRef.current=diningScope;
   const diningActionBusy=useRef(false);
-  useEffect(()=>{setDiningSuggestion([]);setDiningChatNotice('');},[diningScope]);
+  useEffect(()=>{setDiningSuggestion([]);setDiningChatNotice('');setChatCartOpen(false);},[diningScope]);
   const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,ModifierChoice>;step:number;quantity:number}|null>(null);
   useEffect(()=>{setCustomizing(null);},[diningScope]);
   function clearDiningChat(){setDiningSuggestion([]);setDiningChatNotice('');setCustomizing(null);}
+  async function runCartCommand(command:CartCommand){
+    if(!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
+    if(command.kind==='review'&&(customizing||diningSuggestion.length)){setDiningChatNotice('Finish or dismiss your pending menu selections before reviewing the order.');return;}
+    if(command.kind==='confirm'&&(!chatCartOpen||!cartSnapshot?.review||!cartSnapshot.quoteId||customizing||diningSuggestion.length)){setDiningChatNotice('Review the current order in Chat before confirming.');return;}
+    diningActionBusy.current=true;setDiningChatBusy(true);setChatCartOpen(true);setDiningChatNotice('');
+    try{const message=await diningRef.current.chatCommand(command);if(diningScopeRef.current===diningScope)setDiningChatNotice(message);}
+    catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Dining action unavailable.');}
+    finally{diningActionBusy.current=false;setDiningChatBusy(false);}
+  }
   async function addSuggestedDiningItem(diningSuggestion:DiningSuggestion & {scope:string},index:number){
     if(customizing||diningSuggestion.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
@@ -413,7 +424,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const msgRef = doc(collection(db, `hotels/${hotelId}/sessions/${sessionId}/messages`));
     const localId = msgRef.id;
     setInputText('');
-    setDiningSuggestion([]);setDiningChatNotice('');
+    setDiningChatNotice('');
     setChatError(null);
     setPendingGuestMessages((prev) => [...prev, { localId, text }]);
 
@@ -458,6 +469,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         }
         return;
       }
+      const cartCommand=parseCartCommand(text);
+      if(!isStaffControlled&&!wasCompleted&&cartCommand&&(chatCartOpen||cartSnapshot?.count||cartSnapshot?.uncertain||cartCommand.kind==='show'||cartCommand.kind==='review'||cartCommand.kind==='confirm')){
+        await runCartCommand(cartCommand);return;
+      }
       if (!isStaffControlled && customizing?.scope===diningScope) {
         const group=customizing.item.groups[customizing.step];
         const normalized=text.toLowerCase().trim().replace(/[.!?]+$/,'').trim();
@@ -471,6 +486,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         }
       }
       if (!isStaffControlled) {
+        setDiningSuggestion([]);
         const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
         if(suggestion&&diningScopeRef.current===diningScope){setCustomizing(null);setDiningSuggestion(suggestion.map(s=>({...s,scope:diningScope})));}
       } else {
@@ -860,7 +876,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       </header>
 
       {/* VIEW 1: CHAT */}
-      {sessionId&&<GuestDining ref={diningRef} key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'} onSubmitted={clearDiningChat}/>}
+      {sessionId&&<GuestDining ref={diningRef} key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'} onSubmitted={clearDiningChat} onCartSnapshot={setCartSnapshot}/>}
 
       {activeView === 'chat' && (
         <>
@@ -1008,6 +1024,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
               </div>;})()}
               <button type="button" disabled={diningChatBusy} onClick={()=>setCustomizing(null)} className="text-xs underline">Cancel selection</button>
             </div>}
+            {!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&(cartSnapshot?.count||cartSnapshot?.uncertain||chatCartOpen)?<div className="mb-2 border rounded-lg p-2 text-sm space-y-2 max-h-[40vh] overflow-y-auto">
+              <div className="flex justify-between items-center"><button type="button" className="font-semibold text-indigo-700" onClick={()=>setChatCartOpen(v=>!v)}>Your dining cart ({cartSnapshot?.count||0})</button><span>{cartSnapshot?.currency} {((cartSnapshot?.subtotal||0)/100).toFixed(2)}</span></div>
+              {chatCartOpen&&cartSnapshot&&<>
+                {cartSnapshot.uncertain?<div className="text-amber-800">Order status uncertain. Do not submit again. <button type="button" disabled={diningChatBusy||cartSnapshot.busy||isSending} className="underline" onClick={()=>void sendGuestMessage('Retry same confirmation')}>Retry same confirmation</button></div>:<>
+                {cartSnapshot.lines.map((l,i)=><div key={i} className="border-t pt-1"><div>{l.quantity} × {l.name} — {cartSnapshot.currency} {(l.total/100).toFixed(2)}</div>{l.choices.map((v,j)=><div key={j} className="text-xs text-slate-600">{v}</div>)}</div>)}
+                {cartSnapshot.count>0&&<><label className="block text-xs">Guests dining <select value={cartSnapshot.guestCount} disabled={diningChatBusy||cartSnapshot.busy||isSending} className="border rounded p-1" onChange={e=>void sendGuestMessage(e.target.value+' guests')}><option value={0} disabled>Select</option>{Array.from({length:20},(_,i)=><option key={i} value={i+1}>{i+1}</option>)}</select></label>
+                <p className="text-xs text-slate-600">You can say “make that two burgers”, “remove orange juice” or “review my order”.</p>
+                <button type="button" disabled={diningChatBusy||cartSnapshot.busy||isSending||!cartSnapshot.guestCount} className="border rounded px-3 py-2 disabled:opacity-50" onClick={()=>void sendGuestMessage('Review my order')}>Review order</button></>}
+                {cartSnapshot.review&&'subtotalCents' in cartSnapshot.review&&cartSnapshot.quoteId&&<div className="border border-indigo-300 rounded p-2 space-y-1"><strong>Confirm your order</strong><p className="text-xs">{cartSnapshot.review.guestCount} guests · {cartSnapshot.room}</p>{cartSnapshot.review.lines.map((l,i)=><div key={i}>{l.quantity} × {l.name} — {cartSnapshot.review&&'currency' in cartSnapshot.review?cartSnapshot.review.currency:cartSnapshot.currency} {(l.lineTotalCents/100).toFixed(2)}{l.choices.map((v,j)=><div key={j} className="text-xs">{v.question}: {v.answer}</div>)}</div>)}<p className="font-semibold">Subtotal: {cartSnapshot.review.currency} {(cartSnapshot.review.subtotalCents/100).toFixed(2)}</p><p className="text-xs">Staff confirms final charges and delivery. No payment collected here.</p><button type="button" disabled={diningChatBusy||cartSnapshot.busy||isSending} className="bg-indigo-600 text-white rounded px-3 py-2 disabled:opacity-50" onClick={()=>void sendGuestMessage('Confirm and place order')}>Confirm &amp; place order</button></div>}
+                </>}
+                {cartSnapshot.receipt&&<p className="text-emerald-700">Order #{cartSnapshot.receipt} submitted to Front Desk.</p>}
+                {cartSnapshot.error&&<p className="text-red-700">{cartSnapshot.error}</p>}
+              </>}
+            </div>:null}
             {diningChatNotice&&<div role="status" className="mb-2 text-xs text-slate-700">{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
             {session?.status === 'staff_controlled' && (
               <div className="text-[11px] text-slate-500 mb-2 px-1">
