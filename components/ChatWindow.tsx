@@ -1,4 +1,4 @@
-import {GuestDining,type GuestDiningHandle} from './GuestDining';
+import {GuestDining,type GuestDiningHandle,type ChatDiningItem} from './GuestDining';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -104,13 +104,34 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   diningScopeRef.current=diningScope;
   const diningActionBusy=useRef(false);
   useEffect(()=>{setDiningSuggestion(null);setDiningChatNotice('');},[diningScope]);
+  const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,string>;step:number}|null>(null);
+  useEffect(()=>{setCustomizing(null);},[diningScope]);
+  function clearDiningChat(){setDiningSuggestion(null);setDiningChatNotice('');setCustomizing(null);}
   async function addSuggestedDiningItem(){
     if(!diningSuggestion||diningSuggestion.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
     try{
-      const name=await diningRef.current.addFromChat(diningSuggestion.itemId);
-      if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart. No order has been placed.');setDiningSuggestion(null);}
+      const item=await diningRef.current.getChatItem(diningSuggestion.itemId);
+      if(diningScopeRef.current!==diningScope)return;
+      if(item.groups.length){setCustomizing({item,scope:diningScope,choices:{},step:0});setDiningSuggestion(null);}
+      else {
+        const name=await diningRef.current.addCustomizedFromChat(item,{});
+        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.');setDiningSuggestion(null);}
+      }
     }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
+    finally{diningActionBusy.current=false;setDiningChatBusy(false);}
+  }
+  async function chooseDiningOption(choice:string){
+    if(!customizing||customizing.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
+    const group=customizing.item.groups[customizing.step];
+    if(!group||(!choice&&group.required)||(choice&&!group.options.includes(choice)))return;
+    const choices={...customizing.choices,[group.id]:choice};
+    if(customizing.step+1<customizing.item.groups.length){setCustomizing({...customizing,choices,step:customizing.step+1});return;}
+    diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
+    try{
+      const name=await diningRef.current.addCustomizedFromChat(customizing.item,choices);
+      if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(name+' added to your cart.');}
+    }catch(e){if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
   }
   const [isThinking, setIsThinking] = useState(false);
@@ -822,7 +843,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       </header>
 
       {/* VIEW 1: CHAT */}
-      {sessionId&&<GuestDining ref={diningRef} key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'}/>}
+      {sessionId&&<GuestDining ref={diningRef} key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'} onSubmitted={clearDiningChat}/>}
 
       {activeView === 'chat' && (
         <>
@@ -957,6 +978,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
 
           <div className="bg-white p-3 border-t border-slate-200 shrink-0">
             {diningSuggestion?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-2 text-sm"><button type="button" disabled={diningChatBusy||isThinking||isSending} onClick={()=>void addSuggestedDiningItem()} className="bg-indigo-600 text-white rounded-lg px-3 py-2 disabled:opacity-50">{diningChatBusy?'Adding…':'Add '+diningSuggestion.name+' to cart'}</button></div>}
+            {customizing?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-3 space-y-2 text-sm">
+              <p className="font-semibold">{customizing.item.name}</p>
+              <p>{customizing.item.groups[customizing.step].question}</p>
+              <div className="flex flex-wrap gap-2">{customizing.item.groups[customizing.step].options.map(option=><button key={option} type="button" disabled={diningChatBusy||isSending} onClick={()=>void chooseDiningOption(option)} className="border rounded px-3 py-2 text-indigo-700 disabled:opacity-50">{option}{customizing.item.groups[customizing.step].prices[option]?' (+'+customizing.item.currency+' '+(customizing.item.groups[customizing.step].prices[option]/100).toFixed(2)+')':''}</button>)}
+              {!customizing.item.groups[customizing.step].required&&<button type="button" disabled={diningChatBusy||isSending} onClick={()=>void chooseDiningOption('')} className="border rounded px-3 py-2">No thanks</button>}</div>
+              <button type="button" disabled={diningChatBusy} onClick={()=>setCustomizing(null)} className="text-xs underline">Cancel selection</button>
+            </div>}
             {diningChatNotice&&<div role="status" className="mb-2 text-xs text-slate-700">{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
             {session?.status === 'staff_controlled' && (
               <div className="text-[11px] text-slate-500 mb-2 px-1">
