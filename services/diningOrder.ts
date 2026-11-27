@@ -82,7 +82,8 @@ export function simpleDiningProposal(menu:DiningMenu,text:string):DiningProposal
  if(/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove)\b/.test(target))return null;
  const norm=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  const singular=(s:string)=>norm(s).replace(/s$/,'');
- const matches=menu.items.filter(x=>x.available&&(norm(x.name)===norm(target)||singular(x.name)===singular(target)||singular(x.name).endsWith(' '+singular(target))));
+ const exact=menu.items.filter(x=>x.available&&norm(x.name)===norm(target));
+ const matches=exact.length?exact:menu.items.filter(x=>x.available&&(singular(x.name)===singular(target)||singular(x.name).endsWith(' '+singular(target))));
  const quantity=m[1]?({a:1,an:1,one:1,two:2,three:3,four:4,five:5}[m[1]]??Number(m[1])):1;
  if(matches.length!==1||!orderable(matches[0])||!Number.isInteger(quantity)||quantity<1||quantity>20)return null;
  return {itemId:matches[0].id,name:matches[0].name,quantity,choices:{}};
@@ -126,7 +127,9 @@ export function contextualDiningIntent(text:string,transcript:string,items:MenuI
  const t=text.toLowerCase().replace(/’/g,"'").trim();
  if(explicitLocalDiningSearch(text))return false;
  if(/\b(?:help|emergency|allerg(?:y|ic|ies|en)|chok(?:e|ing)|manager|staff|front desk|complaint|refund|towel|housekeeping|clean|repair|broken|not working|cancel|remove|change|replace|instead|no longer|don't|do not|without)\b/i.test(t))return false;
- if(explicitAddTarget(text)||additionalDiningTarget(text))return true;
+ if(explicitAddTarget(text))return true;
+ const additional=additionalDiningTarget(text);
+ if(additional&&diningTargetMatches({enabled:true,currency:'USD',items},additional).length)return true;
  if(diningIntent(text,items)==='dining')return true;
  const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  const exact=items.some(x=>orderable(x)&&(' '+normalize(text)+' ').includes(' '+normalize(x.name)+' '));
