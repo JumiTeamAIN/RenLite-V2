@@ -23,7 +23,7 @@ export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguou
  return 'other';
 }
 export function modifierGroups(item:MenuItem){
- const legacy=item.modifiers.map((m,i)=>{const [question,...options]=m.split('|').map(s=>s.trim());return {id:String(i),question,required:true,options:[...new Set(options.filter(Boolean))],prices:{} as Record<string,number>};});
+ const legacy=item.modifiers.map((m,i)=>{const [question,...options]=m.split('|').map(s=>s.trim());return {id:String(i),question,required:true,options:[...new Set(options.filter(Boolean))],prices:Object.fromEntries(options.filter(Boolean).map(o=>[o,0]))};});
  const advanced=(item.modifierGroups||[]).map(g=>({id:'custom-'+g.id,question:g.question,required:g.required,options:g.options.map(o=>o.label),prices:Object.fromEntries(g.options.map(o=>[o.label,o.priceCents]))}));
  return [...legacy,...advanced];
 }
