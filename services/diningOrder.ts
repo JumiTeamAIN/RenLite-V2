@@ -70,3 +70,44 @@ export function diningReply(menu:DiningMenu,text:string){
  const categories=[...new Set(menu.items.filter(orderable).map(x=>x.category))].slice(0,5);
  return 'Of course! I’d be happy to help with in-room dining. '+(categories.length?'We have '+categories.join(', ')+'. ':'')+'What are you in the mood for? You can also browse Dining and confirm your order there. No order has been placed.';
 }
+
+// Model output is a proposal, never a cart mutation or order confirmation.
+export type DiningProposal={itemId:string;name:string;quantity:number;choices:Record<string,ModifierChoice>};
+export function validateDiningProposals(menu:DiningMenu,raw:unknown):DiningProposal[]|null{
+ if(!menu.enabled||!Array.isArray(raw)||raw.length<1||raw.length>5)return null;
+ const proposals:DiningProposal[]=[];
+ for(const line of raw){
+   const item=menu.items.find(x=>x.id===line?.itemId&&orderable(x));
+   if(!item||!Number.isInteger(line.quantity)||line.quantity<1||line.quantity>20||!line.choices||typeof line.choices!=='object'||Array.isArray(line.choices))return null;
+   const groups=modifierGroups(item),choices:Record<string,ModifierChoice>={};
+   for(const [id,value] of Object.entries(line.choices)){
+     const group=groups.find(g=>g.id===id);
+     if(!group||!validGroupChoice(group,value))return null;
+     const selected=selectedOptions(value);
+     if(selected.length)choices[id]=group.maxSelections>1?selected:selected[0];
+   }
+   proposals.push({itemId:item.id,name:item.name,quantity:line.quantity,choices});
+ }
+ return proposals;
+}
+export function contextualDiningIntent(text:string,transcript:string,items:MenuItem[]){
+ const t=text.toLowerCase().replace(/’/g,"'").trim();
+ if(/\b(?:help|emergency|allerg(?:y|ic|ies|en)|chok(?:e|ing)|manager|staff|front desk|complaint|refund|towel|housekeeping|clean|repair|broken|not working|cancel|remove|change|replace|instead|no longer|don't|do not|without)\b/i.test(t))return false;
+ if(diningIntent(text,items)==='dining')return true;
+ const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const exact=items.some(x=>orderable(x)&&(' '+normalize(text)+' ').includes(' '+normalize(x.name)+' '));
+ const explicit=/\b(?:i(?:'d| would) like|i want|i'll (?:take|have)|can i (?:have|get|order)|please bring|order|add)\b/.test(t);
+ if(exact&&explicit)return true;
+ const prior=transcript.split('\n').filter(l=>l.startsWith('Guest: ')).slice(-4,-1);
+ return Boolean(exact&&prior.some(l=>diningIntent(l.slice(7),items)==='dining')&&t.length<=120&&!/[?]/.test(t));
+}
+export function diningProposalReply(menu:DiningMenu,proposals:DiningProposal[]){
+ const parts=proposals.map(p=>{
+   const item=menu.items.find(x=>x.id===p.itemId)!;
+   const groups=modifierGroups(item);
+   const selected=groups.flatMap(g=>selectedOptions(p.choices[g.id]));
+   const price=estimatedUnitCents(item,{itemId:p.itemId,quantity:p.quantity,choices:p.choices})*p.quantity;
+   return p.quantity+' × '+item.name+(selected.length?' ('+selected.join(', ')+')':'')+' — '+menu.currency+' '+(price/100).toFixed(2);
+ });
+ return 'Certainly! Here are the selections I understood: '+parts.join('; ')+'. Review each selection below and complete any remaining preparation choices. Nothing has been added or submitted yet.';
+}
