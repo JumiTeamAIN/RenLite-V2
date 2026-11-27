@@ -50,8 +50,8 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
      const r=await fetch('/api/dining/guest/'+encodeURIComponent(hotelId),{method:'POST',headers:{Authorization:'Bearer '+await user.getIdToken(),'Content-Type':'application/json'},body:JSON.stringify({sessionId,confirmQuoteId:quoteId}),signal:AbortSignal.timeout(15000)});
      const data=await r.json().catch(()=>({}));
      if(!r.ok){
-       if([400,403,409].includes(r.status)){setUncertain(false);setQuoteId('');setReview(null);try{sessionStorage.removeItem(pendingKey);}catch{}}
-       throw Error(data.error||'Order submission could not be confirmed.');
+       if([400,409].includes(r.status)){setUncertain(false);setQuoteId('');setReview(null);try{sessionStorage.removeItem(pendingKey);}catch{}}
+       throw Error(r.status===403?'Unable to verify order status. Contact the Front Desk before placing another order. Reference: D-'+quoteId.slice(0,12).toUpperCase():data.error||'Order submission could not be confirmed.');
      }
      if(!data.referenceCode)throw Error('Order confirmation unavailable.');
      setReceipt(data.referenceCode);setLines([]);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');try{sessionStorage.removeItem(pendingKey);}catch{}
