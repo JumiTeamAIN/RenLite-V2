@@ -112,3 +112,18 @@ test('priority operations keep unresolved urgent requests ahead of newer routine
  assert.ok(compareSessions(read,recent,outstandingPriorities(records))<0);
  assert.ok(compareSessions(read,recent,outstandingPriorities([]))>0);
 });
+
+import {parseDiningMenu,parseMenuExtraction,appendMenuDraft,EMPTY_MENU} from '../services/diningMenu.ts';
+test('menu extraction rejects guessed invalid prices and imports disabled drafts without overwriting',()=>{
+ const source=[{name:'Burger',category:'Entrees',description:'With fries',priceCents:2200},{name:'Steak',category:'Entrees',description:'',priceCents:null}];
+ assert.deepEqual(parseMenuExtraction(source),source);
+ assert.equal(parseMenuExtraction([{...source[0],priceCents:22.2}]),null);
+ const result=appendMenuDraft([],source,(()=>{let n=0;return()=>String(++n)})());
+ assert.equal(result.items.length,2);assert.ok(result.items.every(x=>!x.available));
+ const again=appendMenuDraft(result.items,[{...source[0],priceCents:100}],()=> 'new');
+ assert.equal(again.skipped,1);assert.equal(again.items[0].priceCents,2200);
+ assert.ok(parseDiningMenu({...EMPTY_MENU,items:result.items}));
+ assert.equal(parseDiningMenu({...EMPTY_MENU,enabled:true,items:result.items}),null);
+ assert.equal(parseDiningMenu({...EMPTY_MENU,items:[{...result.items[1],available:true}]}),null);
+ assert.equal(parseDiningMenu({...EMPTY_MENU,items:[{...result.items[0],upsells:['unknown']}]}),null);
+});
