@@ -177,6 +177,19 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-protein':'Free shrimp'}}]})).status,409);
     assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-invented':'Shrimp'}}]})).status,409);
 
+    const {validateDiningProposals,contextualDiningIntent,diningProposalReply}=await import('../services/diningOrder.ts');
+    const availableMenu={...guestMenu,items:[...guestMenu.items,{id:'juice',name:'Orange Juice',category:'Beverages',description:'',priceCents:500,available:true,modifiers:[],upsells:[],allergens:''}]};
+    const proposed=validateDiningProposals(availableMenu,[{itemId:'burger',quantity:2,choices:{'0':'Medium','custom-toppings':['Mushrooms','Pepperoni']}},{itemId:'juice',quantity:1,choices:{}}]);
+    assert.equal(proposed.length,2);assert.equal(proposed[0].name,'Burger');assert.match(diningProposalReply(availableMenu,proposed),/USD 52.00/);
+    assert.match(diningProposalReply(availableMenu,proposed),/Nothing has been added or submitted/);
+    assert.ok(validateDiningProposals(availableMenu,[{itemId:'burger',quantity:1,choices:{}}]));
+    for(const line of [{itemId:'invented',quantity:1,choices:{}},{itemId:'burger',quantity:21,choices:{}},{itemId:'burger',quantity:1,choices:{'0':'Unapproved'}},{itemId:'burger',quantity:1,choices:{'custom-toppings':['Mushrooms','Mushrooms']}},{itemId:'burger',quantity:1,choices:{'custom-invented':'Free'}}])assert.equal(validateDiningProposals(availableMenu,[line]),null);
+    assert.equal(validateDiningProposals({...availableMenu,enabled:false},proposed),null);
+    assert.equal(contextualDiningIntent('Orange Juice','Guest: I would like a burger.\nRen: What to drink?\nGuest: Orange Juice',availableMenu.items),true);
+    assert.equal(contextualDiningIntent('Orange Juice','Guest: Orange Juice',availableMenu.items),false);
+    assert.equal(contextualDiningIntent('Please bring a burger and Orange Juice','Guest: Please bring a burger and Orange Juice',availableMenu.items),true);
+    assert.equal(contextualDiningIntent('Cancel my burger','Guest: I want a burger.\nGuest: Cancel my burger',availableMenu.items),false);
+    assert.equal(contextualDiningIntent('I have a burger allergy','Guest: I have a burger allergy',availableMenu.items),false);
     const multiCart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium','custom-toppings':['Mushrooms','Pepperoni']}}]};
     const multiReview=await guestDining(outageGuest,multiCart);
     assert.equal(multiReview.status,200);

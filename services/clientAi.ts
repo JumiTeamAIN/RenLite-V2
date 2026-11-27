@@ -30,10 +30,12 @@ interface ServerConciergeRequest {
   priority: 'normal' | 'high' | 'urgent';
 }
 
-export type DiningSuggestion = {itemId:string;name:string};
+import type {DiningProposal} from './diningOrder';
+export type DiningSuggestion = DiningProposal;
 
 interface ServerConciergeResponse {
-  diningSuggestion?: DiningSuggestion;
+  diningSuggestion?: {itemId:string;name:string};
+  diningProposals?: DiningProposal[];
   text?: string;
   replyEnglish?: string;
   latestGuestEnglish?: string;
@@ -538,7 +540,8 @@ export const sendMessageToAI = async (
     });
     return true;
     });
-    if(replySaved&&data.diningSuggestion&&typeof data.diningSuggestion.itemId==='string'&&typeof data.diningSuggestion.name==='string')return data.diningSuggestion;
+    if(replySaved&&Array.isArray(data.diningProposals)&&data.diningProposals.length)return data.diningProposals;
+    if(replySaved&&data.diningSuggestion&&typeof data.diningSuggestion.itemId==='string'&&typeof data.diningSuggestion.name==='string')return [{...data.diningSuggestion,quantity:1,choices:{}}];
   } catch (error) {
     console.error('Ren AI Error:', error);
     // Do not post an outage message into a staff-controlled or closed chat.

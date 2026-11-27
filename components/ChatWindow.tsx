@@ -97,27 +97,30 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   const [activeView, setActiveView] = useState<'chat' | 'quick' | 'requests' | 'dining'>('chat');
   const [inputText, setInputText] = useState('');
   const diningRef=useRef<GuestDiningHandle>(null);
-  const [diningSuggestion,setDiningSuggestion]=useState<(DiningSuggestion & {scope:string})|null>(null);
+  const [diningSuggestion,setDiningSuggestion]=useState<(DiningSuggestion & {scope:string})[]>([]);
   const [diningChatNotice,setDiningChatNotice]=useState('');
   const [diningChatBusy,setDiningChatBusy]=useState(false);
   const diningScope=hotelId+':'+sessionId;
   const diningScopeRef=useRef(diningScope);
   diningScopeRef.current=diningScope;
   const diningActionBusy=useRef(false);
-  useEffect(()=>{setDiningSuggestion(null);setDiningChatNotice('');},[diningScope]);
-  const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,ModifierChoice>;step:number}|null>(null);
+  useEffect(()=>{setDiningSuggestion([]);setDiningChatNotice('');},[diningScope]);
+  const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,ModifierChoice>;step:number;quantity:number}|null>(null);
   useEffect(()=>{setCustomizing(null);},[diningScope]);
-  function clearDiningChat(){setDiningSuggestion(null);setDiningChatNotice('');setCustomizing(null);}
-  async function addSuggestedDiningItem(){
-    if(!diningSuggestion||diningSuggestion.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
+  function clearDiningChat(){setDiningSuggestion([]);setDiningChatNotice('');setCustomizing(null);}
+  async function addSuggestedDiningItem(diningSuggestion:DiningSuggestion & {scope:string},index:number){
+    if(customizing||diningSuggestion.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
     try{
       const item=await diningRef.current.getChatItem(diningSuggestion.itemId);
       if(diningScopeRef.current!==diningScope)return;
-      if(item.groups.length){setCustomizing({item,scope:diningScope,choices:{},step:0});setDiningSuggestion(null);}
+      const choices=diningSuggestion.choices;
+      if(Object.entries(choices).some(([id,value])=>!item.groups.some(g=>g.id===id&&validGroupChoice(g,value))))throw Error('Preparation options changed. Please select again.');
+      const step=item.groups.findIndex(g=>!Object.prototype.hasOwnProperty.call(choices,g.id));
+      if(step>=0){setCustomizing({item,scope:diningScope,choices,step,quantity:diningSuggestion.quantity});setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       else {
-        const name=await diningRef.current.addCustomizedFromChat(item,{});
-        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.');setDiningSuggestion(null);}
+        const name=await diningRef.current.addCustomizedFromChat(item,choices,diningSuggestion.quantity);
+        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.');setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       }
     }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
@@ -127,10 +130,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const group=customizing.item.groups[customizing.step];
     if(!group||!validGroupChoice(group,choice))return;
     const choices={...customizing.choices,[group.id]:choice};
-    if(customizing.step+1<customizing.item.groups.length){setCustomizing({...customizing,choices,step:customizing.step+1});return;}
+    const next=customizing.item.groups.findIndex((g,i)=>i>customizing.step&&!Object.prototype.hasOwnProperty.call(choices,g.id));
+    if(next>=0){setCustomizing({...customizing,choices,step:next});return;}
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
     try{
-      const name=await diningRef.current.addCustomizedFromChat(customizing.item,choices);
+      const name=await diningRef.current.addCustomizedFromChat(customizing.item,choices,customizing.quantity);
       if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(name+' added to your cart.');}
     }catch(e){if(diningScopeRef.current===diningScope){setCustomizing(null);setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
@@ -409,7 +413,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const msgRef = doc(collection(db, `hotels/${hotelId}/sessions/${sessionId}/messages`));
     const localId = msgRef.id;
     setInputText('');
-    setDiningSuggestion(null);setDiningChatNotice('');
+    setDiningSuggestion([]);setDiningChatNotice('');
     setChatError(null);
     setPendingGuestMessages((prev) => [...prev, { localId, text }]);
 
@@ -468,7 +472,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       }
       if (!isStaffControlled) {
         const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
-        if(suggestion&&diningScopeRef.current===diningScope){setCustomizing(null);setDiningSuggestion({...suggestion,scope:diningScope});}
+        if(suggestion&&diningScopeRef.current===diningScope){setCustomizing(null);setDiningSuggestion(suggestion.map(s=>({...s,scope:diningScope})));}
       } else {
         // Translate guest message to English for staff even during active human takeover
         const translated = await translateMessageToEnglish(
@@ -990,9 +994,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           </div>
 
           <div className="bg-white p-3 border-t border-slate-200 shrink-0">
-            {diningSuggestion?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-2 text-sm"><button type="button" disabled={diningChatBusy||isThinking||isSending} onClick={()=>void addSuggestedDiningItem()} className="bg-indigo-600 text-white rounded-lg px-3 py-2 disabled:opacity-50">{diningChatBusy?'Adding…':'Add '+diningSuggestion.name+' to cart'}</button></div>}
+            {diningSuggestion.length>0&&!customizing&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-3 text-sm space-y-2">
+              {diningSuggestion.filter(s=>s.scope===diningScope).map((s,i)=><div key={i} className="space-y-1"><p className="font-medium">{s.quantity} × {s.name}</p>{Object.values(s.choices).flat().length>0&&<p className="text-xs text-slate-600">{Object.values(s.choices).flat().join(', ')}</p>}<button type="button" disabled={diningChatBusy||isThinking||isSending} onClick={()=>void addSuggestedDiningItem(s,i)} className="bg-indigo-600 text-white rounded-lg px-3 py-2 disabled:opacity-50">Review &amp; add {s.name}</button></div>)}
+              <button type="button" disabled={diningChatBusy} onClick={()=>setDiningSuggestion([])} className="text-xs underline">Dismiss remaining selections</button>
+            </div>}
             {customizing?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-3 space-y-2 text-sm">
-              <p className="font-semibold">{customizing.item.name}</p>
+              <p className="font-semibold">{customizing.quantity} × {customizing.item.name}</p>
               <p>{customizing.item.groups[customizing.step].question}</p>
               {(()=>{const group=customizing.item.groups[customizing.step];const selected=selectedOptions(customizing.choices[group.id]);return <div className="flex flex-wrap gap-2">
                 {group.maxSelections>1&&<p className="w-full text-xs">Choose {group.minSelections}–{group.maxSelections} options.</p>}
