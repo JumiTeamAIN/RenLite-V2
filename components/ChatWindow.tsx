@@ -488,7 +488,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       if (!isStaffControlled) {
         setDiningSuggestion([]);
         const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
-        if(suggestion&&diningScopeRef.current===diningScope){setCustomizing(null);setDiningSuggestion(suggestion.map(s=>({...s,scope:diningScope})));}
+        if(suggestion&&diningScopeRef.current===diningScope){
+          setCustomizing(null);
+          const scoped=suggestion.map(s=>({...s,scope:diningScope}));
+          setDiningSuggestion(scoped);
+          // Start missing preparation questions directly, without requiring a preliminary Add click.
+          // A fully specified item still needs an explicit Review & add action.
+          if(scoped.length===1&&diningRef.current){
+            try{
+              const p=scoped[0],item=await diningRef.current.getChatItem(p.itemId);
+              if(diningScopeRef.current!==diningScope)return;
+              if(Object.entries(p.choices).some(([id,value])=>!item.groups.some(g=>g.id===id&&validGroupChoice(g,value))))throw Error('Preparation options changed. Please select again.');
+              const step=item.groups.findIndex(g=>g.options.length&&!Object.prototype.hasOwnProperty.call(p.choices,g.id));
+              if(step>=0){setCustomizing({item,scope:diningScope,choices:p.choices,step,quantity:p.quantity});setDiningSuggestion([]);}
+            }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Please review the menu selection.');}
+          }
+        }
       } else {
         // Translate guest message to English for staff even during active human takeover
         const translated = await translateMessageToEnglish(
