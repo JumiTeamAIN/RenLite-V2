@@ -2,8 +2,9 @@ import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
 import {modifierGroups,reviewCart,estimatedUnitCents,type CartLine} from '../services/diningOrder';
-export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>};
-export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean}>(({hotelId,sessionId,visible},ref)=>{
+export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
+export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,string>)=>Promise<string>};
+export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void}>(({hotelId,sessionId,visible,onSubmitted},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
  const [quoteId,setQuoteId]=useState(''),[receipt,setReceipt]=useState(''),[uncertain,setUncertain]=useState(false);
@@ -35,7 +36,13 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  const change=(next:CartLine[])=>{setLines(next);setReview(null);setQuoteId('');};
  const add=(item:MenuItem)=>{if(lines.length<30&&orderable(item)){change([...lines,{itemId:item.id,quantity:1,choices:{}}]);setNotice(item.name+' added to your cart.');}};
  const edit=(index:number,patch:Partial<CartLine>)=>change(lines.map((l,i)=>i===index?{...l,...patch}:l));
- React.useImperativeHandle(ref,()=>({addFromChat:async(itemId:string)=>{
+ async function getChatItem(itemId:string):Promise<ChatDiningItem>{
+   const r=await api({});
+   const item=(r.menu as DiningMenu).items.find(x=>x.id===itemId);
+   if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
+   return {name:item.name,id:item.id,groups:modifierGroups(item),currency:r.menu.currency};
+ }
+ async function addChatItem(itemId:string,choices:Record<string,string>={},expected?:ChatDiningItem){
    if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
    if(lines.length>=30)throw Error('Your cart is full. Review your selections first.');
    chatAdding.current=true;setBusy(true);const g=generation.current;
@@ -44,12 +51,16 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
      if(g!==generation.current)throw Error('Dining session changed. Please try again.');
      const item=(r.menu as DiningMenu).items.find(x=>x.id===itemId);
      if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
+     if(expected&&JSON.stringify(expected.groups)!==JSON.stringify(modifierGroups(item)))throw Error('Preparation options changed. Please select the item again.');
+     const checked=reviewCart(r.menu,[{itemId:item.id,quantity:1,choices}],1);
+     if('error' in checked)throw Error(checked.error);
      setMenu(r.menu);setRoom(r.roomNumber);setReady(true);
-     change([...lines,{itemId:item.id,quantity:1,choices:{}}]);
+     change([...lines,{itemId:item.id,quantity:1,choices}]);
      setCartOpen(true);setNotice(item.name+' added to your cart.');
      return item.name;
    }finally{chatAdding.current=false;if(g===generation.current)setBusy(false);}
- }}));
+ }
+ React.useImperativeHandle(ref,()=>({addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices)=>addChatItem(item.id,choices,item)}));
  async function preview(){
    if(uncertain||submitting.current)return;
    const g=generation.current;setBusy(true);setError('');setReview(null);
@@ -71,7 +82,7 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
        throw Error(r.status===403?'Unable to verify order status. Contact the Front Desk before placing another order. Reference: D-'+quoteId.slice(0,12).toUpperCase():data.error||'Order submission could not be confirmed.');
      }
      if(!data.referenceCode)throw Error('Order confirmation unavailable.');
-     setReceipt(data.referenceCode);setLines([]);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');try{sessionStorage.removeItem(pendingKey);}catch{}
+     setReceipt(data.referenceCode);setLines([]);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');onSubmitted?.();try{sessionStorage.removeItem(pendingKey);}catch{}
    }catch(e){setError(e instanceof Error?e.message:'Submission could not be confirmed. Retry the same confirmation.');}
    finally{submitting.current=false;setBusy(false);}
  }
