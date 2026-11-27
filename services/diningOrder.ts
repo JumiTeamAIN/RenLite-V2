@@ -1,4 +1,4 @@
-import {orderable,type DiningMenu,type MenuItem} from './diningMenu';
+import {orderable,type DiningMenu,type MenuItem} from './diningMenu.ts';
 export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguous'|'other'{
  const t=text.toLowerCase().replace(/[’]/g,"'").trim();
  if(/\b(clean|make up|service) (my|our|the) room\b|\b(my|our) room (cleaned|serviced)\b|\bhousekeeping\b/.test(t))return 'other';
