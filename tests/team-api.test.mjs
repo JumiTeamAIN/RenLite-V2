@@ -218,7 +218,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(simpleDiningProposal(availableMenu,'I want a burger and juice'),null);
     assert.equal(simpleDiningProposal(availableMenu,'I want a burger allergy'),null);
     assert.equal(simpleDiningProposal({...availableMenu,items:availableMenu.items.map(x=>({...x,soldOut:true}))},'I want a burger'),null);
-    const {explicitAddTarget,preparationReply,cartPreparationReply,modifierGroups}=await import('../services/diningOrder.ts');
+    const {explicitAddTarget,preparationReply,cartPreparationReply}=await import('../services/diningOrder.ts');
     assert.equal(explicitAddTarget('May I add orange juice to that?'),'orange juice');
     assert.equal(explicitAddTarget('Please add orange juice to my order.'),'orange juice');
     assert.equal(explicitAddTarget('Do not add orange juice'),null);
