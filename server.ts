@@ -1,4 +1,4 @@
-import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch,explicitAddTarget} from './services/diningOrder.ts';
+import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch,explicitAddTarget,additionalDiningTarget,diningTargetMatches} from './services/diningOrder.ts';
 import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,parseModifierSuggestions,orderable} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
@@ -1217,7 +1217,7 @@ async function startServer() {
             }
           }catch(e){console.warn('[dining-plan]',{outcome:'planner-unavailable',status:getHttpStatusFromError(e)});}
         }
-        if(canPlan&&explicitAddTarget(latestGuestMessage)&&!simple){
+        if(canPlan&&(explicitAddTarget(latestGuestMessage)||(additionalDiningTarget(latestGuestMessage)&&diningTargetMatches(diningMenu,additionalDiningTarget(latestGuestMessage)!).length))&&!simple){
           res.json({text:'I could not confirm that menu selection. Please check the available items in Dining or tell me the exact menu item. Nothing has been added or submitted.',guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});return;
         }
         if(intent!=='other'&&canPlan){
