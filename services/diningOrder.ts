@@ -236,7 +236,7 @@ export function cartPreparationReply(menu:DiningMenu,lines:CartLine[],text:strin
 // Recognize the intent, not a single exact sentence. Item matching remains menu-grounded.
 export function additionalDiningTarget(text:string):string|null{
  const t=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'').trim();
- const m=t.match(/^(?:i (?:also (?:want|would like|need)|want|would like|will have)|i'd (?:also )?like|i'll (?:also )?have|(?:can|may|could) i (?:also )?have|(?:and|also) )\s*(.+?)(?:,? (?:please|as well|too|also))?$/);
+ const m=t.match(/^(?:i also (?:want|would like|need)|i'd also like|i'll also have|(?:can|may|could) i also have|(?:and|also) )\s*(.+?)(?:,? (?:please|as well|too|also))?$/);
  if(!m||!m[1]||/\b(?:and|or|with|without|not|no|except|instead|allerg\w*|cancel|remove|towels?|pillows?|blankets?|linens?|toiletries|housekeeping|staff|manager|help|nearby)\b/.test(m[1]))return null;
  return m[1].trim();
 }
