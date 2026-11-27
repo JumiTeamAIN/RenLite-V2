@@ -1,9 +1,9 @@
 import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
-import {modifierGroups,reviewCart,estimatedUnitCents,type CartLine} from '../services/diningOrder';
+import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
-export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,string>)=>Promise<string>};
+export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>)=>Promise<string>};
 export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void}>(({hotelId,sessionId,visible,onSubmitted},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
@@ -34,7 +34,22 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  useEffect(()=>{return()=>{generation.current++;};},[hotelId,sessionId]);
  useEffect(()=>{if(visible&&!submitting.current&&!chatAdding.current)void refresh();},[visible,hotelId,sessionId]);
  const change=(next:CartLine[])=>{setLines(next);setReview(null);setQuoteId('');};
- const add=(item:MenuItem)=>{if(lines.length<30&&orderable(item)){change([...lines,{itemId:item.id,quantity:1,choices:{}}]);setNotice(item.name+' added to your cart.');}};
+ const [configuring,setConfiguring]=useState<CartLine|null>(null);
+ const add=(item:MenuItem)=>{if(lines.length<30&&orderable(item)){
+   const line={itemId:item.id,quantity:1,choices:{}};
+   if(modifierGroups(item).length){setConfiguring(line);setNotice('');setCartOpen(false);}
+   else {change([...lines,line]);setNotice(item.name+' added to your cart.');}
+ }};
+ const configItem=configuring?menu.items.find(x=>x.id===configuring.itemId):undefined;
+ const configValid=Boolean(configuring&&configItem&&orderable(configItem)&&modifierGroups(configItem).every(g=>validGroupChoice(g,configuring.choices[g.id])));
+ function choiceControls(item:MenuItem,line:CartLine,onChange:(choices:CartLine['choices'])=>void){
+   return modifierGroups(item).map(group=>{
+     const selected=selectedOptions(line.choices[group.id]);
+     return <div key={group.id} className="space-y-1 text-sm"><p className="font-medium">{group.question} {group.maxSelections>1?'(choose '+group.minSelections+'–'+group.maxSelections+')':group.required?'(required)':'(optional)'}</p>
+       {group.options.length===0?<p className="text-amber-800">Contact staff for preparation options.</p>:group.maxSelections>1?group.options.map(o=><label key={o} className="flex gap-2 items-center py-1"><input type="checkbox" checked={selected.includes(o)} disabled={!selected.includes(o)&&selected.length>=group.maxSelections} onChange={e=>onChange({...line.choices,[group.id]:e.target.checked?[...selected,o]:selected.filter(v=>v!==o)})}/>{o}{group.prices[o]?' (+'+money(group.prices[o])+')':''}</label>):<select aria-label={group.question} className="block border rounded p-2 w-full" value={selected[0]||''} onChange={e=>onChange({...line.choices,[group.id]:e.target.value})}><option value="">{group.required?'Choose an option':'No extra / none'}</option>{group.options.map(o=><option key={o} value={o}>{o}{group.prices[o]?' (+'+money(group.prices[o])+')':''}</option>)}</select>}
+     </div>;
+   });
+ }
  const edit=(index:number,patch:Partial<CartLine>)=>change(lines.map((l,i)=>i===index?{...l,...patch}:l));
  async function getChatItem(itemId:string):Promise<ChatDiningItem>{
    const r=await api({});
@@ -42,7 +57,7 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
    if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
    return {name:item.name,id:item.id,groups:modifierGroups(item),currency:r.menu.currency};
  }
- async function addChatItem(itemId:string,choices:Record<string,string>={},expected?:ChatDiningItem){
+ async function addChatItem(itemId:string,choices:Record<string,ModifierChoice>={},expected?:ChatDiningItem){
    if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
    if(lines.length>=30)throw Error('Your cart is full. Review your selections first.');
    chatAdding.current=true;setBusy(true);const g=generation.current;
@@ -82,7 +97,7 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
        throw Error(r.status===403?'Unable to verify order status. Contact the Front Desk before placing another order. Reference: D-'+quoteId.slice(0,12).toUpperCase():data.error||'Order submission could not be confirmed.');
      }
      if(!data.referenceCode)throw Error('Order confirmation unavailable.');
-     setReceipt(data.referenceCode);setLines([]);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');onSubmitted?.();try{sessionStorage.removeItem(pendingKey);}catch{}
+     setReceipt(data.referenceCode);setLines([]);setConfiguring(null);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');onSubmitted?.();try{sessionStorage.removeItem(pendingKey);}catch{}
    }catch(e){setError(e instanceof Error?e.message:'Submission could not be confirmed. Retry the same confirmation.');}
    finally{submitting.current=false;setBusy(false);}
  }
@@ -93,10 +108,16 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  <button type="button" disabled={busy||uncertain} onClick={()=>void refresh()} className="border rounded-lg px-3 py-2 text-xs">Refresh menu availability</button>
  {error&&<p role="alert" className="text-red-700 text-sm">{error}</p>}{receipt&&<div role="status" className="border border-emerald-300 bg-emerald-50 rounded p-3 text-sm">Order #{receipt} submitted to Front Desk. Staff will confirm final charges and delivery.</div>}{uncertain&&<div className="border border-amber-300 rounded p-3 text-sm">Submission needs confirmation. Do not create another order. <button type="button" disabled={busy} onClick={()=>void confirm()} className="underline font-bold">Retry same confirmation</button></div>}
  {!ready?<p>{busy?'Loading…':'Menu not confirmed. Refresh or contact staff.'}</p>:!menu.enabled?<p>Online room service is not currently available. Please contact the front desk.</p>:<fieldset disabled={busy||uncertain} className="space-y-4">
- <div className="flex flex-wrap gap-2">{['',...categories].map(c=><button key={c} type="button" onClick={()=>{setCategory(c);setCartOpen(false);}} className={'border rounded-full px-3 py-1 text-xs '+(category===c?'bg-indigo-600 text-white':'bg-white')}>{c||'All'}</button>)}</div>
- {!cartOpen&&menu.items.filter(item=>!category||item.category===category).map(item=><div key={item.id} className="border rounded-xl p-3 bg-white space-y-1"><p className="text-xs text-slate-500">{item.category}</p><div className="flex justify-between gap-2"><strong>{item.name}</strong><span>{item.priceCents===null?'':money(item.priceCents)}</span></div><p className="text-sm">{item.description}</p>{item.allergens&&<p className="text-xs">Hotel-provided allergen information: {item.allergens}</p>}<button type="button" disabled={!orderable(item)||lines.length>=30} onClick={()=>add(item)} className="border rounded px-3 py-2 text-sm disabled:opacity-50">{item.soldOut?'Sold out':'Add to order'}</button>{lines.some(l=>l.itemId===item.id)&&<span className="ml-2 text-xs font-semibold text-indigo-700">{lines.filter(l=>l.itemId===item.id).reduce((n,l)=>n+l.quantity,0)} in cart</span>}</div>)}
+ <div className="flex flex-wrap gap-2">{['',...categories].map(c=><button key={c} type="button" onClick={()=>{setCategory(c);setCartOpen(false);setConfiguring(null);}} className={'border rounded-full px-3 py-1 text-xs '+(category===c?'bg-indigo-600 text-white':'bg-white')}>{c||'All'}</button>)}</div>
+ {!cartOpen&&!configuring&&menu.items.filter(item=>!category||item.category===category).map(item=><div key={item.id} className="border rounded-xl p-3 bg-white space-y-1"><p className="text-xs text-slate-500">{item.category}</p><div className="flex justify-between gap-2"><strong>{item.name}</strong><span>{item.priceCents===null?'':money(item.priceCents)}</span></div><p className="text-sm">{item.description}</p>{item.allergens&&<p className="text-xs">Hotel-provided allergen information: {item.allergens}</p>}<button type="button" disabled={!orderable(item)||lines.length>=30} onClick={()=>add(item)} className="border rounded px-3 py-2 text-sm disabled:opacity-50">{item.soldOut?'Sold out':modifierGroups(item).length?'Customize & add':'Add to order'}</button>{lines.some(l=>l.itemId===item.id)&&<span className="ml-2 text-xs font-semibold text-indigo-700">{lines.filter(l=>l.itemId===item.id).reduce((n,l)=>n+l.quantity,0)} in cart</span>}</div>)}
+ {configuring&&configItem&&!cartOpen&&<div className="border rounded-xl bg-white p-4 space-y-4">
+ <div className="flex justify-between"><h3 className="font-bold">{configItem.name}</h3><button type="button" className="underline text-sm" onClick={()=>setConfiguring(null)}>Cancel</button></div>
+ {choiceControls(configItem,configuring,choices=>setConfiguring({...configuring,choices}))}
+ <label className="block text-sm">Quantity<select className="ml-2 border rounded p-1" value={configuring.quantity} onChange={e=>setConfiguring({...configuring,quantity:Number(e.target.value)})}>{Array.from({length:20},(_,i)=><option key={i}>{i+1}</option>)}</select></label>
+ <button type="button" disabled={!configValid||lines.length>=30} onClick={()=>{if(!configValid)return;change([...lines,configuring]);setConfiguring(null);setNotice(configItem.name+' added to your cart.');}} className="w-full bg-indigo-600 text-white rounded-lg p-3 disabled:opacity-50">Add to order — {money(estimatedUnitCents(configItem,configuring)*configuring.quantity)}</button>
+ </div>}
  {cartOpen&&<div className="space-y-3"><h3 className="font-bold">Your selections</h3><button type="button" onClick={()=>setCartOpen(false)} className="text-indigo-700 underline text-sm">Back to menu</button>{!lines.length&&<p>Your cart is empty.</p>}
- {lines.map((line,index)=>{const item=menu.items.find(x=>x.id===line.itemId);return <div key={index} className="border rounded-xl p-3 space-y-2"><div className="flex justify-between"><strong>{item?.name||'Unavailable item'}</strong><button type="button" className="text-red-700 text-sm" onClick={()=>change(lines.filter((_,i)=>i!==index))}>Remove</button></div>{(!item||!orderable(item))&&<p className="text-red-700 text-xs">No longer available. Remove or replace.</p>}<label className="block text-sm">Quantity<select className="ml-2 border rounded p-1" value={line.quantity} onChange={e=>edit(index,{quantity:Number(e.target.value)})}>{Array.from({length:20},(_,i)=><option key={i}>{i+1}</option>)}</select></label>{item&&modifierGroups(item).map(group=><label key={group.id} className="block text-sm">{group.question} {group.required?'(required)':'(optional)'}{group.options.length?<select className="block border rounded p-2 w-full" value={line.choices[group.id]||''} onChange={e=>edit(index,{choices:{...line.choices,[group.id]:e.target.value}})}><option value="">{group.required?'Choose an option':'No extra / none'}</option>{group.options.map(o=><option key={o} value={o}>{o}{group.prices[o]?` (+${money(group.prices[o])})`:''}</option>)}</select>:<p className="text-amber-800 text-xs">Preparation choices have not been configured. Contact staff.</p>}</label>)}</div>})}
+ {lines.map((line,index)=>{const item=menu.items.find(x=>x.id===line.itemId);return <div key={index} className="border rounded-xl p-3 space-y-2"><div className="flex justify-between"><strong>{item?.name||'Unavailable item'}</strong><button type="button" className="text-red-700 text-sm" onClick={()=>change(lines.filter((_,i)=>i!==index))}>Remove</button></div>{(!item||!orderable(item))&&<p className="text-red-700 text-xs">No longer available. Remove or replace.</p>}<label className="block text-sm">Quantity<select className="ml-2 border rounded p-1" value={line.quantity} onChange={e=>edit(index,{quantity:Number(e.target.value)})}>{Array.from({length:20},(_,i)=><option key={i}>{i+1}</option>)}</select></label>{item&&choiceControls(item,line,choices=>edit(index,{choices}))}</div>})}
  <label className="block text-sm font-medium">How many guests are dining?<select value={guestCount} onChange={e=>{setGuestCount(Number(e.target.value));setReview(null);setQuoteId('');}} className="block w-full border rounded p-2 mt-1"><option value={0}>Select guest count</option>{Array.from({length:20},(_,i)=><option key={i} value={i+1}>{i+1}</option>)}</select></label>
  {!guestCount&&<p className="text-xs text-amber-800">Select the number of guests before reviewing your order.</p>}
  <p className="text-xs text-slate-600">For allergies or dietary concerns, confirm directly with hotel staff. Do not rely on this menu as a guarantee of allergen safety.</p>
@@ -104,6 +125,6 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  {review&&'subtotalCents' in review&&<div className="border rounded-xl p-4 space-y-2"><h3 className="font-bold">Confirm your order</h3><p>{review.guestCount} guests · {room||'Location not confirmed'}</p>{review.lines.map((l,i)=><div key={i} className="text-sm">{l.quantity} × {l.name} — {money(l.lineTotalCents)}{l.choices.map(c=><div key={c.question} className="text-xs">{c.question}: {c.answer}</div>)}</div>)}<p className="font-bold">Subtotal: {money(review.subtotalCents)}</p><p className="text-xs">Taxes, charges, availability and delivery subject to staff confirmation. No payment is collected here.</p><button type="button" disabled={busy||!quoteId} onClick={()=>void confirm()} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 font-semibold">Confirm &amp; Place Order</button></div>}
  </div>}
  </fieldset>}
- </div>{ready&&menu.enabled&&<div className="shrink-0 border-t bg-white p-3 space-y-1"><p role="status" className="text-xs text-emerald-700 min-h-4">{notice}</p><button type="button" onClick={()=>setCartOpen(v=>!v)} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 flex justify-between font-semibold"><span>{cartOpen?"Back to menu":"View cart"} ({count})</span><span>{hasUnavailable?"Review items":money(subtotal)}</span></button><p className="text-xs text-slate-500">{hasUnavailable?"An item is unavailable. Review your cart.":"Estimated subtotal · not submitted"}</p></div>}
+ </div>{ready&&menu.enabled&&<div className="shrink-0 border-t bg-white p-3 space-y-1"><p role="status" className="text-xs text-emerald-700 min-h-4">{notice}</p><button type="button" onClick={()=>{setConfiguring(null);setCartOpen(v=>!v);}} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 flex justify-between font-semibold"><span>{cartOpen?"Back to menu":"View cart"} ({count})</span><span>{hasUnavailable?"Review items":money(subtotal)}</span></button><p className="text-xs text-slate-500">{hasUnavailable?"An item is unavailable. Review your cart.":"Estimated subtotal · not submitted"}</p></div>}
  </section>;
 });

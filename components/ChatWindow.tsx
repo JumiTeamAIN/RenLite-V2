@@ -1,4 +1,5 @@
 import {GuestDining,type GuestDiningHandle,type ChatDiningItem} from './GuestDining';
+import {selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -104,7 +105,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   diningScopeRef.current=diningScope;
   const diningActionBusy=useRef(false);
   useEffect(()=>{setDiningSuggestion(null);setDiningChatNotice('');},[diningScope]);
-  const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,string>;step:number}|null>(null);
+  const [customizing,setCustomizing]=useState<{item:ChatDiningItem;scope:string;choices:Record<string,ModifierChoice>;step:number}|null>(null);
   useEffect(()=>{setCustomizing(null);},[diningScope]);
   function clearDiningChat(){setDiningSuggestion(null);setDiningChatNotice('');setCustomizing(null);}
   async function addSuggestedDiningItem(){
@@ -121,10 +122,10 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
   }
-  async function chooseDiningOption(choice:string){
+  async function chooseDiningOption(choice:ModifierChoice){
     if(!customizing||customizing.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
     const group=customizing.item.groups[customizing.step];
-    if(!group||(!choice&&group.required)||(choice&&!group.options.includes(choice)))return;
+    if(!group||!validGroupChoice(group,choice))return;
     const choices={...customizing.choices,[group.id]:choice};
     if(customizing.step+1<customizing.item.groups.length){setCustomizing({...customizing,choices,step:customizing.step+1});return;}
     diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
@@ -456,9 +457,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       if (!isStaffControlled && customizing?.scope===diningScope) {
         const group=customizing.item.groups[customizing.step];
         const normalized=text.toLowerCase().trim().replace(/[.!?]+$/,'').trim();
-        const choice=group.options.find(o=>o.toLowerCase().trim()===normalized);
+        const parts=group.maxSelections>1?normalized.split(/\s*,\s*|\s+and\s+/):[normalized];
+        const matches=parts.map(p=>group.options.find(o=>o.toLowerCase().trim()===p));
+        const choice=matches.every(Boolean)?(group.maxSelections>1?matches as string[]:matches[0]):undefined;
         const skip=!group.required&&/^(no|no thanks|no thank you|none|skip)$/.test(normalized);
-        if(choice||skip){
+        if((choice&&validGroupChoice(group,choice))||skip){
           await chooseDiningOption(choice||'');
           return;
         }
@@ -991,8 +994,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
             {customizing?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-3 space-y-2 text-sm">
               <p className="font-semibold">{customizing.item.name}</p>
               <p>{customizing.item.groups[customizing.step].question}</p>
-              <div className="flex flex-wrap gap-2">{customizing.item.groups[customizing.step].options.map(option=><button key={option} type="button" disabled={diningChatBusy||isSending} onClick={()=>void chooseDiningOption(option)} className="border rounded px-3 py-2 text-indigo-700 disabled:opacity-50">{option}{customizing.item.groups[customizing.step].prices[option]?' (+'+customizing.item.currency+' '+(customizing.item.groups[customizing.step].prices[option]/100).toFixed(2)+')':''}</button>)}
-              {!customizing.item.groups[customizing.step].required&&<button type="button" disabled={diningChatBusy||isSending} onClick={()=>void chooseDiningOption('')} className="border rounded px-3 py-2">No thanks</button>}</div>
+              {(()=>{const group=customizing.item.groups[customizing.step];const selected=selectedOptions(customizing.choices[group.id]);return <div className="flex flex-wrap gap-2">
+                {group.maxSelections>1&&<p className="w-full text-xs">Choose {group.minSelections}–{group.maxSelections} options.</p>}
+                {group.options.map(option=><button key={option} type="button" aria-pressed={group.maxSelections>1?selected.includes(option):undefined} disabled={diningChatBusy||isSending||(group.maxSelections>1&&!selected.includes(option)&&selected.length>=group.maxSelections)} onClick={()=>{if(group.maxSelections===1)void chooseDiningOption(option);else setCustomizing({...customizing,choices:{...customizing.choices,[group.id]:selected.includes(option)?selected.filter(o=>o!==option):[...selected,option]}});}} className={'border rounded px-3 py-2 disabled:opacity-50 '+(selected.includes(option)?'bg-indigo-100 text-indigo-800':'text-indigo-700')}>{option}{group.prices[option]?' (+'+customizing.item.currency+' '+(group.prices[option]/100).toFixed(2)+')':''}</button>)}
+                {group.maxSelections>1?<button type="button" disabled={diningChatBusy||isSending||!validGroupChoice(group,selected)} onClick={()=>void chooseDiningOption(selected)} className="bg-indigo-600 text-white rounded px-3 py-2 disabled:opacity-50">Continue</button>:!group.required&&<button type="button" disabled={diningChatBusy||isSending} onClick={()=>void chooseDiningOption('')} className="border rounded px-3 py-2">No thanks</button>}
+              </div>;})()}
               <button type="button" disabled={diningChatBusy} onClick={()=>setCustomizing(null)} className="text-xs underline">Cancel selection</button>
             </div>}
             {diningChatNotice&&<div role="status" className="mb-2 text-xs text-slate-700">{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
