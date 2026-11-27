@@ -133,7 +133,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       if(step>=0){setCustomizing({item,scope:diningScope,choices,step,quantity:diningSuggestion.quantity});setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       else {
         const name=await diningRef.current.addCustomizedFromChat(item,choices,diningSuggestion.quantity);
-        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.'+(diningSuggestion.quantity&&diningSuggestion.scope===diningScope&&index===0?nextOffer():''));setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
+        if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart.'+(diningSuggestion.scope===diningScope&&index===0?nextOffer():''));setDiningSuggestion(p=>p.filter((_,i)=>i!==index));}
       }
     }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
     finally{diningActionBusy.current=false;setDiningChatBusy(false);}
@@ -488,7 +488,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         catch(e){setDiningChatNotice(e instanceof Error?e.message:'Could not check the missing item.');}return;
       }
       if(!isStaffControlled&&!wasCompleted&&diningRef.current&&cartSnapshot?.count&&/^continue without it[.!]?$/i.test(text.trim())){setDiningChatNotice(diningRef.current.dismissMissingItem());return;}
-      if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&offerActive.current&&/^(?:no|no thanks|no thank you|not now)[.!]?$/i.test(text.trim())){setDiningChatNotice('Of course.'+nextOffer());return;}
+      if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&offerActive.current&&/^(?:no|no thanks|no thank you|not now)[.!]?$/i.test(text.trim())){const followup=nextOffer();setDiningChatNotice('Of course.'+(followup.includes('anything else')?' Tell me when you are ready to review your order.':followup));if(followup.includes('anything else'))offerActive.current=false;return;}
       // Explicit add commands are grounded in the fresh menu, not the generic model.
       // Keep a pending preparation question active when the guest adds a beverage.
       if(!isStaffControlled&&!wasCompleted&&diningRef.current&&(customizing||cartSnapshot?.count||diningSuggestion.length||chatCartOpen)&&(explicitAddTarget(text)||additionalDiningTarget(text)||offerActive.current)){
