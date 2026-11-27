@@ -188,6 +188,8 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(startDining.status,200);assert.equal(startDining.data.requests.length,0);assert.match(startDining.data.text,/No order has been placed/);
     const itemSuggestion=await outageTurn('dining-suggestion','I would like to order a burger.');
     assert.equal(itemSuggestion.status,200);assert.equal(itemSuggestion.data.requests.length,0);assert.equal(itemSuggestion.data.diningSuggestion.itemId,'burger');assert.match(itemSuggestion.data.text,/No order has been placed/);
+    const followup=await outageTurn('dining-followup','I’ll take a burger.');
+    assert.equal(followup.status,200);assert.equal(followup.data.diningSuggestion.itemId,'burger');assert.equal(followup.data.requests.length,0);
 
     assert.equal((await dining(other,'availability')).status,403);
     await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false});
