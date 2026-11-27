@@ -400,7 +400,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
   }, [messages, isThinking, activeView]);
 
   const sendGuestMessage = async (rawText: string) => {
-    if (!rawText.trim() || !sessionId || !guestUid || !session || sendingRef.current) return;
+    if (!rawText.trim() || !sessionId || !guestUid || !session || sendingRef.current || diningActionBusy.current) return;
     sendingRef.current = true;
     setIsSending(true);
 
@@ -465,7 +465,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       }
       if (!isStaffControlled) {
         const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
-        if(suggestion&&diningScopeRef.current===diningScope)setDiningSuggestion({...suggestion,scope:diningScope});
+        if(suggestion&&diningScopeRef.current===diningScope){setCustomizing(null);setDiningSuggestion({...suggestion,scope:diningScope});}
       } else {
         // Translate guest message to English for staff even during active human takeover
         const translated = await translateMessageToEnglish(
@@ -1024,12 +1024,12 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                disabled={isThinking}
+                disabled={isThinking||diningChatBusy}
               />
               <button
                 type="button"
                 onClick={handleSend}
-                disabled={!inputText.trim() || isSending || !session}
+                disabled={!inputText.trim() || isSending || diningChatBusy || !session}
                 aria-label="Send message"
                 className="min-w-[44px] min-h-[44px] bg-indigo-600 rounded-xl flex items-center justify-center text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
               >
