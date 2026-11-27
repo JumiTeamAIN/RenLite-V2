@@ -137,7 +137,43 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await guestDining(other)).status,403);
     assert.equal((await guestDining(outageGuest)).data.menu.items[0].name,'Burger');
     const cart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium'}}]};
-    assert.equal((await guestDining(outageGuest,cart)).data.review.subtotalCents,4400);
+    await outageSession.update({roomNumber:'101',locationType:'room'});
+    const reviewed=await guestDining(outageGuest,cart);
+    assert.equal(reviewed.data.review.subtotalCents,4400);
+    const quoteId=reviewed.data.quoteId;
+    assert.ok(quoteId);
+    assert.equal((await guestDining(other,{confirmQuoteId:quoteId})).status,403);
+    const locationQuote=(await guestDining(outageGuest,cart)).data.quoteId;
+    await outageSession.update({locationType:'lobby'});
+    assert.equal((await guestDining(outageGuest,{confirmQuoteId:locationQuote})).status,409);
+    await outageSession.update({locationType:'room'});
+    const submitted=await guestDining(outageGuest,{confirmQuoteId:quoteId});
+    assert.equal(submitted.status,200);
+    const duplicate=await guestDining(outageGuest,{confirmQuoteId:quoteId});
+    assert.equal(duplicate.data.requestId,submitted.data.requestId);
+    const previousState=(await outageSession.get()).data().status;
+    await outageSession.update({status:'completed'});
+    const recovered=await guestDining(outageGuest,{confirmQuoteId:quoteId});
+    assert.equal(recovered.status,200);
+    assert.equal(recovered.data.requestId,submitted.data.requestId);
+    assert.equal((await guestDining(other,{confirmQuoteId:quoteId})).status,403);
+    await outageSession.update({status:previousState});
+    const orderRef=outageHotel.collection('requests').doc(submitted.data.requestId);
+    const stored=(await orderRef.get()).data();
+    assert.equal(stored.department,'Front Desk');
+    assert.equal(stored.diningOrder.subtotalCents,4400);
+    assert.equal(stored.roomNumber,'101');
+    async function diningTransition(account,nextStatus){
+      const response=await fetch(base+'/api/dining/staff-transition',{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({hotelId:owner.uid,requestId:submitted.data.requestId,nextStatus})});
+      return response.status;
+    }
+    assert.equal(await diningTransition(other,'acknowledged'),403);
+    assert.equal(await diningTransition(owner,'completed'),409);
+    assert.equal(await diningTransition(owner,'acknowledged'),200);
+    assert.equal(await diningTransition(owner,'in_progress'),200);
+    assert.equal((await orderRef.get()).data().posEnteredBy,owner.uid);
+    assert.equal(await diningTransition(owner,'completed'),200);
+    const staleQuote=(await guestDining(outageGuest,cart)).data.quoteId;
     assert.equal((await guestDining(outageGuest,{...cart,lines:[{itemId:'burger',quantity:2,choices:{}}]})).status,409);
     const startDining=await outageTurn('dining-intent','I would like room service.');
     assert.equal(startDining.status,200);assert.equal(startDining.data.requests.length,0);assert.match(startDining.data.text,/No order has been placed/);
@@ -148,6 +184,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await dining(owner,'availability',{itemId:'burger',soldOut:true,version:2})).status,200);
     assert.equal((await dining(owner,'availability')).data.items[0].soldOut,true);
     assert.equal((await guestDining(outageGuest,cart)).status,409);
+    assert.equal((await guestDining(outageGuest,{confirmQuoteId:staleQuote})).status,409);
     const soldOutTurn=await outageTurn('dining-sold-out','I would like a burger.');
     assert.equal(soldOutTurn.status,200);assert.equal(soldOutTurn.data.requests.length,0);assert.match(soldOutTurn.data.text,/sold out/);
 

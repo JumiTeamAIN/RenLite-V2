@@ -925,27 +925,83 @@ async function startServer() {
     }catch{res.status(503).json({error:'Could not confirm safety alert.'});}
   });
 
-  // Guest dining reads and cart previews are scoped to a live guest-owned session.
+  // A server-issued quote binds the guest's review to the exact menu version and delivery room.
   app.post('/api/dining/guest/:hotelId',async(req,res)=>{
     res.set('Cache-Control','no-store');
-    const hotelId=req.params.hotelId,{sessionId,lines,guestCount}=req.body||{};
-    if(!validHotelId(hotelId)||!validHotelId(sessionId)){res.status(400).json({error:'Invalid session.'});return;}
+    const hotelId=req.params.hotelId,{sessionId,lines,guestCount,confirmQuoteId}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||(confirmQuoteId!==undefined&&(!validHotelId(confirmQuoteId)||lines!==undefined))){res.status(400).json({error:'Invalid dining request.'});return;}
     let uid:string;
     try{const header=req.headers.authorization||'';if(!header.startsWith('Bearer '))throw Error();uid=(await adminAuth.verifyIdToken(header.slice(7),true)).uid;}catch{res.status(401).json({error:'Sign in required.'});return;}
     try{
-      const hotel=teamDb().collection('hotels').doc(hotelId);
-      const [p,session,snap]=await Promise.all([hotel.get(),hotel.collection('sessions').doc(sessionId).get(),hotel.collection('dining').doc('menu').get()]);
-      if(!p.exists||!guestAccessOpen(session.data(),uid)){res.status(403).json({error:'Conversation expired or ended.'});return;}
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId),menuRef=hotel.collection('dining').doc('menu');
+      if(confirmQuoteId!==undefined){
+        const quoteRef=session.collection('diningQuotes').doc(confirmQuoteId);
+        const requestId='dining-'+confirmQuoteId, ticket=hotel.collection('requests').doc(requestId);
+        const result=await db.runTransaction(async tx=>{
+          const [p,ss,snap,q,existing]=await Promise.all([tx.get(hotel),tx.get(session),tx.get(menuRef),tx.get(quoteRef),tx.get(ticket)]);
+          const state=ss.data(),quote=q.data();
+          if(!p.exists)return {status:403,error:'Order unavailable.'};
+          if(existing.exists){
+            if(existing.data()?.guestUid!==uid||existing.data()?.sessionId!==sessionId)return {status:403,error:'Order unavailable.'};
+            return {status:200,referenceCode:existing.data()?.referenceCode,requestId};
+          }
+          if(!guestAccessOpen(state,uid)||!quote||quote.guestUid!==uid)return {status:403,error:'Conversation or order review unavailable.'};
+          if(state.status==='completed'||typeof state.roomNumber!=='string'||!state.roomNumber.trim()||['Pending room #','Location needed'].includes(state.roomNumber)||!['room','suite'].includes(state.locationType||'room')||Date.now()-(quote.createdAt?.toMillis?.()||0)>15*60000||state.roomNumber!==quote.roomNumber||(snap.data()?.version||0)!==quote.menuVersion)return {status:409,error:'Menu or delivery location changed, or review expired. Review the order again.'};
+          const menu=parseDiningMenu(snap.data());
+          if(!menu)return {status:409,error:'Menu unavailable. Review again.'};
+          const review=reviewCart(menu,quote.lines,quote.guestCount);
+          if('error' in review||JSON.stringify(review)!==quote.reviewJson)return {status:409,error:'Order changed. Review again.'};
+          const referenceCode='D-'+confirmQuoteId.slice(0,12).toUpperCase();
+          const description=review.lines.map(l=>l.quantity+' × '+l.name+(l.choices.length?' ('+l.choices.map(c=>c.question+': '+c.answer).join('; ')+')':'')).join('\n');
+          const now=FieldValue.serverTimestamp();
+          tx.create(ticket,{referenceCode,sessionId,guestUid:uid,item:'Room service order',quantity:1,category:'Room Service',department:'Front Desk',roomNumber:quote.roomNumber,status:'pending',description:('Confirmed dining order · '+review.guestCount+' guests · '+review.currency+' '+(review.subtotalCents/100).toFixed(2)+' subtotal\n'+description).slice(0,1000),priority:'normal',source:'structured',createdAt:now,lastUpdated:now,diningOrder:{...review,quoteId:confirmQuoteId}});
+          tx.update(session,{lastUpdatedAt:now,previewText:'Dining order '+referenceCode+' submitted for staff processing.',previewStaffText:'Dining order '+referenceCode+' awaiting POS entry.',isUnread:true});
+          tx.create(session.collection('messages').doc(requestId),{sender:'system',guestUid:uid,text:'Your dining order #'+referenceCode+' has been submitted to the hotel team for processing. Staff must confirm availability, final charges and delivery. This is not a POS or payment confirmation.',timestamp:now});
+          return {status:200,referenceCode,requestId};
+        });
+        res.status(result.status).json(result);return;
+      }
+      const [p,ss,snap]=await Promise.all([hotel.get(),session.get(),menuRef.get()]);
+      if(!p.exists||!guestAccessOpen(ss.data(),uid)){res.status(403).json({error:'Conversation expired or ended.'});return;}
       const menu=snap.exists?parseDiningMenu(snap.data()):EMPTY_MENU;
       if(!menu){res.status(503).json({error:'Menu requires review.'});return;}
       const publicMenu={...menu,items:menu.enabled?menu.items.filter(x=>x.available):[]};
       if(lines!==undefined){
         const review=reviewCart(publicMenu,lines,guestCount);
         if('error' in review){res.status(409).json({error:review.error});return;}
-        res.json({review,roomNumber:session.data()?.roomNumber||'',notice:'Preview only. No order has been submitted.'});return;
+        const roomNumber=ss.data()?.roomNumber||'';
+        if(ss.data()?.status==='completed'||!roomNumber.trim()||['Pending room #','Location needed'].includes(roomNumber)||!['room','suite'].includes(ss.data()?.locationType||'room')){res.status(409).json({error:'Confirm your room or suite location before reviewing an order.'});return;}
+        if(isRateLimited(uid)){res.status(429).json({error:'Too many reviews. Try again later.'});return;}
+        const quoteId=randomBytes(16).toString('hex');
+        await session.collection('diningQuotes').doc(quoteId).create({guestUid:uid,roomNumber,menuVersion:snap.data()?.version||0,lines,guestCount,reviewJson:JSON.stringify(review),createdAt:FieldValue.serverTimestamp()});
+        res.json({review,roomNumber,quoteId,notice:'Review only. No order has been submitted.'});return;
       }
-      res.json({menu:publicMenu,roomNumber:session.data()?.roomNumber||''});
-    }catch{res.status(503).json({error:'Dining menu unavailable.'});}
+      res.json({menu:publicMenu,roomNumber:ss.data()?.roomNumber||''});
+    }catch{res.status(503).json({error:'Dining operation could not be confirmed. Retry the same confirmation if submitting an order.'});}
+  });
+
+  // Dining tickets are server-owned; in_progress specifically means entered into POS.
+  app.post('/api/dining/staff-transition',async(req,res)=>{
+    const user=await verifiedStaff(req);
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const {hotelId,requestId,nextStatus}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(requestId)||!['acknowledged','in_progress','completed','cancelled'].includes(nextStatus)){res.status(400).json({error:'Invalid order action.'});return;}
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),ref=hotel.collection('requests').doc(requestId);
+      const result=await db.runTransaction(async tx=>{
+        const [p,m,t]=await Promise.all([tx.get(hotel),tx.get(hotel.collection('members').doc(user.uid)),tx.get(ref)]);
+        const member=m.data(),order=t.data();
+        if(!p.exists||!(teamAdmin(user.uid,hotelId,true,member,user.email)||(member?.active===true&&['manager','associate'].includes(member.role))))return 403;
+        if(!order?.diningOrder)return 404;
+        if(order.status===nextStatus)return 200;
+        const allowed:Record<string,string[]>={pending:['acknowledged','cancelled'],acknowledged:['in_progress','cancelled'],in_progress:['completed','cancelled']};
+        if(!allowed[order.status]?.includes(nextStatus))return 409;
+        const now=FieldValue.serverTimestamp();
+        tx.update(ref,{status:nextStatus,lastUpdated:now,...(nextStatus==='acknowledged'?{acknowledgedAt:now,acknowledgedBy:user.uid}:{}),...(nextStatus==='in_progress'?{posEnteredAt:now,posEnteredBy:user.uid}:{}),...(nextStatus==='completed'?{completedAt:now,completedBy:user.uid}:{}),...(nextStatus==='cancelled'?{cancelledAt:now,cancelledBy:user.uid}:{})});
+        return 200;
+      });
+      res.status(result).json(result===200?{ok:true}:{error:'Order action not permitted or status changed. Refresh before retrying.'});
+    }catch{res.status(503).json({error:'Order action could not be confirmed.'});}
   });
 
   app.post('/api/gemini/concierge', async (req, res) => {
@@ -1279,7 +1335,7 @@ STRICT RULES:
 - STRICT ANTI-HALLUCINATION RULE: Never invent, guess, or make up hotel policies, prices, operating hours, on-site amenities, OR local restaurant/business/attraction names (e.g., never invent fictional names like "Burger Barn", "Pizza Palace", "Taco Town", or "Fun Zone Arcade").
 - Every local business, restaurant, or attraction name you recommend MUST appear verbatim in either the Hotel Knowledge Base (FAQs) or VERIFIED LOCAL SEARCH RESULTS below. If neither contains verified businesses for the guest's question, honestly explain that live search could not verify suitable listings. Offer practical ways to search nearby, and offer Front Desk assistance as an optional alternative. Never imply a handoff was requested unless the guest explicitly asks for it.
 - Never claim that local emergency services (911/fire/police) have been dispatched. For immediate physical danger (fire, smoke, gas leak, medical emergency, violence), give clear safety guidance, advise contacting local emergency services immediately, and flag escalationTriggered=true with escalationSeverity="critical".
-- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining (or front desk if unavailable). Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
+- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining to review and explicitly confirm submission (or front desk if unavailable). Never treat chat text as an order confirmation. Only the Dining confirmation screen can submit an order. Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
 
 LAYER 2 — HOSPITALITY INTELLIGENCE & TONE:
 - Always reply in the SAME language the guest used in their latest message (e.g. Spanish -> Spanish, French -> French).
