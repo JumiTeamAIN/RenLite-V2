@@ -782,6 +782,44 @@ async function startServer() {
     } catch { res.status(500).json({error:'Unable to load assistance activity.'}); }
   });
 
+  // Provider-independent safety triage. Only persisted guest-owned turns can create alerts.
+  app.post('/api/guest/safety-check', async (req,res)=>{
+    res.set('Cache-Control','no-store');
+    let uid:string;
+    try{const h=req.headers.authorization||'';if(!h.startsWith('Bearer '))throw Error();uid=(await adminAuth.verifyIdToken(h.slice(7).trim())).uid;}
+    catch{res.status(401).json({error:'Authentication required.'});return;}
+    const {hotelId,sessionId,guestMessageId}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)){res.status(400).json({error:'Invalid guest turn.'});return;}
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId);
+      const message=session.collection('messages').doc(guestMessageId);
+      const key=createHash('sha256').update(sessionId+'|'+guestMessageId).digest('hex');
+      const ticket=hotel.collection('requests').doc('safety-'+key);
+      const notice=session.collection('messages').doc('safety-'+key);
+      const result=await db.runTransaction(async tx=>{
+        const [h,s,m,t]=await Promise.all([tx.get(hotel),tx.get(session),tx.get(message),tx.get(ticket)]);
+        const state=s.data(),turn=m.data();
+        if(!h.exists||!guestAccessOpen(state,uid)||turn?.guestUid!==uid||turn?.sender!=='guest'||typeof turn.text!=='string'||turn.text.length>5000)return null;
+        const signal=detectDeterministicSafetySignal(turn.text);
+        if(!signal.triggered)return {triggered:false};
+        if(t.exists)return {triggered:true,referenceCode:t.data()?.referenceCode};
+        if(state.status==='completed')return null;
+        const referenceCode='R-'+key.slice(0,8).toUpperCase();
+        const severity=signal.severity==='critical'?'critical':'high';
+        const now=FieldValue.serverTimestamp();
+        tx.create(ticket,{referenceCode,sessionId,guestUid:uid,item:signal.item,quantity:1,category:signal.category,department:signal.department,roomNumber:typeof state.roomNumber==='string'&&state.roomNumber.trim()?state.roomNumber.slice(0,50):'Pending room #',status:'escalated',description:signal.reason,originalMessage:turn.text.slice(0,1000),priority:severity==='critical'?'urgent':'high',source:'structured',createdAt:now,lastUpdated:now});
+        // Keep staff ownership; never downgrade a critical alert with a later high-priority report.
+        tx.update(session,{lastUpdatedAt:now,isUnread:true,previewText:turn.text,previewStaffText:turn.text,...(state.status==='staff_controlled'?{}:{status:'escalated'}),...(state.escalationSeverity==='critical'&&severity!=='critical'?{}:{escalationSeverity:severity,escalationReason:signal.reason})});
+        const phone=typeof h.data()?.emergencyPhone==='string'&&h.data()!.emergencyPhone.trim()? ' Hotel contact: '+h.data()!.emergencyPhone.slice(0,50)+'.':'';
+        const text=severity==='critical'?'If you are in immediate danger, contact local emergency services now. Do not wait for a chat reply.'+phone+' An urgent alert (#'+referenceCode+') has been recorded in the hotel staff inbox.':'Your concern has been recorded as a high-priority alert (#'+referenceCode+') for the hotel team. Please contact the front desk directly if immediate assistance is needed.';
+        tx.create(notice,{sender:'system',guestUid:uid,text,timestamp:now});
+        return {triggered:true,referenceCode};
+      });
+      if(!result){res.status(403).json({error:'Guest turn unavailable.'});return;}
+      res.json(result);
+    }catch{res.status(503).json({error:'Could not confirm safety alert.'});}
+  });
+
   app.post('/api/gemini/concierge', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
