@@ -204,7 +204,12 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.deepEqual(parseCartCommand('Confirm and place order'),{kind:'confirm'});
     assert.equal(parseCartCommand('Yes please'),null);
     assert.equal(parseCartCommand('I need towels'),null);
-    const {simpleDiningProposal,guidedDiningReply}=await import('../services/diningOrder.ts');
+    const {simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch}=await import('../services/diningOrder.ts');
+    const {needsLocalSearchGrounding}=await import('../services/hotelLogic.ts');
+    assert.equal(needsLocalSearchGrounding('I would like to order a burger.',''),true);
+    assert.equal(explicitLocalDiningSearch('I would like to order a burger.'),false);
+    assert.equal(explicitLocalDiningSearch('Where can I get a burger nearby?'),true);
+    assert.equal(contextualDiningIntent('I want to order a burger nearby','',availableMenu.items),false);
     const burgerRequest=simpleDiningProposal(availableMenu,'I would like to order a burger.');
     assert.equal(burgerRequest.itemId,'burger');
     assert.match(guidedDiningReply(availableMenu,burgerRequest),/Cooking temperature/);
