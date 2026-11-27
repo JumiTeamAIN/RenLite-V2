@@ -3,7 +3,7 @@ import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
 import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
-export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>)=>Promise<string>};
+export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
 export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void}>(({hotelId,sessionId,visible,onSubmitted},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
@@ -57,7 +57,7 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
    if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
    return {name:item.name,id:item.id,groups:modifierGroups(item),currency:r.menu.currency};
  }
- async function addChatItem(itemId:string,choices:Record<string,ModifierChoice>={},expected?:ChatDiningItem){
+ async function addChatItem(itemId:string,choices:Record<string,ModifierChoice>={},expected?:ChatDiningItem,quantity=1){
    if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
    if(lines.length>=30)throw Error('Your cart is full. Review your selections first.');
    chatAdding.current=true;setBusy(true);const g=generation.current;
@@ -67,15 +67,15 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
      const item=(r.menu as DiningMenu).items.find(x=>x.id===itemId);
      if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
      if(expected&&JSON.stringify(expected.groups)!==JSON.stringify(modifierGroups(item)))throw Error('Preparation options changed. Please select the item again.');
-     const checked=reviewCart(r.menu,[{itemId:item.id,quantity:1,choices}],1);
+     const checked=reviewCart(r.menu,[{itemId:item.id,quantity,choices}],1);
      if('error' in checked)throw Error(checked.error);
      setMenu(r.menu);setRoom(r.roomNumber);setReady(true);
-     change([...lines,{itemId:item.id,quantity:1,choices}]);
+     change([...lines,{itemId:item.id,quantity,choices}]);
      setCartOpen(true);setNotice(item.name+' added to your cart.');
      return item.name;
    }finally{chatAdding.current=false;if(g===generation.current)setBusy(false);}
  }
- React.useImperativeHandle(ref,()=>({addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices)=>addChatItem(item.id,choices,item)}));
+ React.useImperativeHandle(ref,()=>({addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
  async function preview(){
    if(uncertain||submitting.current)return;
    const g=generation.current;setBusy(true);setError('');setReview(null);
