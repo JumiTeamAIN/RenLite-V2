@@ -41,13 +41,13 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  async function save(){
    const valid=parseDiningMenu(menu);if(!valid){setFeedback('Review missing names, prices, duplicate items, currency and modifiers. Enable at least one priced item before enabling dining.');return;}
    const g=generation.current;setBusy(true);setFeedback('');
-   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setFeedback('Menu saved. Guest menu preview is available when enabled; submission is not yet active.');}}
+   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setFeedback('Menu saved. Guest ordering is available when enabled.');}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Save failed.');}
    finally{if(g===generation.current)setBusy(false);}
  }
  const input='w-full border border-slate-300 rounded-md px-3 py-2 text-sm';
  return <section className="flex-1 overflow-y-auto p-6"><div className="max-w-5xl mx-auto space-y-4">
-   <header><h2 className="text-2xl font-bold">Dining Menu</h2><p className="text-sm text-slate-600">Create and review the hotel menu. Guests can browse and review approved menu items when enabled; order submission is not yet active.</p></header>
+   <header><h2 className="text-2xl font-bold">Dining Menu</h2><p className="text-sm text-slate-600">Create and review the hotel menu. Guests can browse and submit approved menu items when enabled.</p></header>
    {feedback&&<p role="status" className="border rounded-lg p-3 text-sm bg-slate-50">{feedback}</p>}
    <div className="flex gap-2 flex-wrap"><button type="button" disabled={busy} onClick={()=>{if(!dirty||window.confirm('Discard unsaved menu changes?'))void load();}} className="border rounded px-3 py-2 text-sm disabled:opacity-50">Reload menu</button></div>
    {!ready?<p className="text-sm">{busy?'Loading…':'Menu not loaded. Reload to continue.'}</p>:<fieldset disabled={busy} className="space-y-4 disabled:opacity-70">
@@ -58,13 +58,26 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      <input ref={cameraRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden onChange={e=>void importFiles(e.target.files)}/>
      <div className="flex flex-wrap gap-2"><button type="button" onClick={()=>cameraRef.current?.click()} className="border rounded-lg px-4 py-2">Take photo</button><button type="button" onClick={()=>fileRef.current?.click()} className="border rounded-lg px-4 py-2">Upload menu</button><button type="button" onClick={add} className="border rounded-lg px-4 py-2">Add item manually</button></div>
    </div>
-   <div className="bg-white border rounded-xl p-4 flex flex-wrap items-center gap-4"><label className="text-sm">Currency code <input className="border rounded p-2 w-24 uppercase" value={menu.currency} maxLength={3} onChange={e=>update({currency:e.target.value.toUpperCase()})}/></label><label className="text-sm"><input type="checkbox" checked={menu.enabled} onChange={e=>update({enabled:e.target.checked})}/> Enable guest menu preview</label><span className="text-xs text-slate-500">{menu.items.length}/150 items</span></div>
+   <div className="bg-white border rounded-xl p-4 flex flex-wrap items-center gap-4"><label className="text-sm">Currency code <input className="border rounded p-2 w-24 uppercase" value={menu.currency} maxLength={3} onChange={e=>update({currency:e.target.value.toUpperCase()})}/></label><label className="text-sm"><input type="checkbox" checked={menu.enabled} onChange={e=>update({enabled:e.target.checked})}/> Enable guest dining orders</label><span className="text-xs text-slate-500">{menu.items.length}/150 items</span></div>
    {menu.items.map(x=><div key={x.id} className="bg-white border rounded-xl p-4 space-y-3">
      <div className="flex justify-between items-center"><strong>{x.name||'New item'}</strong><button type="button" className="text-red-700 text-sm" onClick={()=>remove(x.id)}>Remove</button></div>
      <div className="grid sm:grid-cols-3 gap-3"><label className="text-sm">Name<input className={input} value={x.name} maxLength={150} onChange={e=>item(x.id,{name:e.target.value})}/></label><label className="text-sm">Category<input className={input} value={x.category} maxLength={80} onChange={e=>item(x.id,{category:e.target.value})}/></label><label className="text-sm">Price ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" value={x.priceCents===null?'':x.priceCents/100} onChange={e=>item(x.id,{priceCents:e.target.value===''?null:Math.round(Number(e.target.value)*100)})}/></label></div>
      <label className="block text-sm">Description<textarea className={input} value={x.description} maxLength={500} onChange={e=>item(x.id,{description:e.target.value})}/></label>
      <label className="block text-sm">Hotel-verified allergen information (unknown if blank)<input className={input} value={x.allergens} maxLength={300} onChange={e=>item(x.id,{allergens:e.target.value})}/></label>
      <label className="block text-sm">Required preparation choices (one group per line: question | option | option)<textarea className={input} placeholder={'Cooking temperature | Medium rare | Medium | Medium well | Well done'} value={x.modifiers.join('\n')} onChange={e=>item(x.id,{modifiers:e.target.value.split('\n').slice(0,10)})}/></label>
+     <div className="border rounded-lg p-3 space-y-3">
+       <div className="flex flex-wrap justify-between gap-2"><strong className="text-sm">Custom preparation and add-ons</strong><button type="button" disabled={(x.modifierGroups||[]).length>=10} className="border rounded px-2 py-1 text-xs" onClick={()=>item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:'',required:false,options:[{label:'',priceCents:0}]}]})}>Add choice group</button></div>
+       <p className="text-xs text-slate-600">One selection per group. Use separate optional groups for extras that can be combined. Prices are additional per item.</p>
+       {(x.modifierGroups||[]).map((g,gi)=>{
+         const editGroup=(patch:Partial<typeof g>)=>item(x.id,{modifierGroups:(x.modifierGroups||[]).map((v,i)=>i===gi?{...v,...patch}:v)});
+         return <div key={g.id} className="border rounded-lg p-3 space-y-2">
+           <div className="flex gap-2 items-center"><label className="flex-1 text-sm">Question<input className={input} value={g.question} maxLength={150} onChange={e=>editGroup({question:e.target.value})} placeholder="How would you like it cooked?"/></label><button type="button" className="text-red-700 text-xs" onClick={()=>item(x.id,{modifierGroups:(x.modifierGroups||[]).filter((_,i)=>i!==gi)})}>Remove group</button></div>
+           <label className="text-sm"><input type="checkbox" checked={g.required} onChange={e=>editGroup({required:e.target.checked})}/> Required selection</label>
+           {g.options.map((o,oi)=><div key={oi} className="flex items-end gap-2"><label className="flex-1 text-xs">Option<input className={input} value={o.label} maxLength={100} onChange={e=>editGroup({options:g.options.map((v,i)=>i===oi?{...v,label:e.target.value}:v)})}/></label><label className="w-28 text-xs">Extra ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" value={o.priceCents/100} onChange={e=>editGroup({options:g.options.map((v,i)=>i===oi?{...v,priceCents:Math.round(Number(e.target.value)*100)}:v)})}/></label><button type="button" disabled={g.options.length<=1} className="text-red-700 text-xs py-2" onClick={()=>editGroup({options:g.options.filter((_,i)=>i!==oi)})}>Remove</button></div>)}
+           <button type="button" disabled={g.options.length>=20} className="border rounded px-2 py-1 text-xs" onClick={()=>editGroup({options:[...g.options,{label:'',priceCents:0}]})}>Add option</button>
+         </div>;
+       })}
+     </div>
      <label className="block text-sm">Suggested upsell items<select multiple className={input} value={x.upsells} onChange={e=>item(x.id,{upsells:Array.from(e.target.selectedOptions,o=>o.value).slice(0,10)})}>{menu.items.filter(y=>y.id!==x.id&&y.name).map(y=><option key={y.id} value={y.id}>{y.name}</option>)}</select></label>
      <label className="text-sm"><input type="checkbox" disabled={x.priceCents===null} checked={x.available} onChange={e=>item(x.id,{available:e.target.checked})}/> Approved for guest menu</label>
    </div>)}
