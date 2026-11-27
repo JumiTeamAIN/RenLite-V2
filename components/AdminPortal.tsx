@@ -1,3 +1,4 @@
+import {isOutstanding,priorityRank,compareRequests,outstandingPriorities,compareSessions,newUrgentIds} from '../services/priorityOperations';
 import {extractFaqFile,reviewFaqs} from '../services/documentFaq';
 import {hasInvalidFaqText,type FaqDraft} from '../services/faqImport';
 import React, { useState, useEffect, useRef } from 'react';
@@ -76,6 +77,29 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const [requestsReady, setRequestsReady] = useState(false);
   const [sessionsError, setSessionsError] = useState('');
   const [requestsError, setRequestsError] = useState('');
+  const [soundEnabled,setSoundEnabled]=useState(false);
+  const [soundError,setSoundError]=useState('');
+  const audioRef=useRef<AudioContext|null>(null);
+  const seenUrgent=useRef<Set<string>|null>(null);
+  const [focusedRequest,setFocusedRequest]=useState<string|null>(null);
+  const playAlert=()=>{
+    const audio=audioRef.current;
+    if(!audio||audio.state!=='running')return false;
+    try{
+      for(let i=0;i<2;i++){
+        const tone=audio.createOscillator(),gain=audio.createGain(),at=audio.currentTime+i*.32;
+        tone.type='sine';tone.frequency.value=660;gain.gain.setValueAtTime(0,at);gain.gain.linearRampToValueAtTime(.16,at+.025);gain.gain.linearRampToValueAtTime(0,at+.22);tone.connect(gain);gain.connect(audio.destination);tone.start(at);tone.stop(at+.23);
+      }
+      return true;
+    }catch{return false;}
+  };
+  const toggleSound=async()=>{
+    if(soundEnabled){setSoundEnabled(false);return;}
+    try{const audio=audioRef.current||new AudioContext();audioRef.current=audio;await audio.resume();if(!playAlert())throw Error();setSoundEnabled(true);setSoundError('');}
+    catch{setSoundEnabled(false);setSoundError('Sound unavailable in this browser. Keep visual alerts in view.');}
+  };
+  useEffect(()=>()=>{audioRef.current?.close().catch(()=>{});audioRef.current=null;},[]);
+
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [replyText, setReplyText] = useState('');
@@ -266,6 +290,20 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       cancelled = true;
     };
   }, [locations, hotelId]);
+
+  useEffect(()=>{
+    if(!isAuthenticated){seenUrgent.current=null;setSoundEnabled(false);return;}
+    if(!requestsReady||requestsError)return;
+    const current=new Set(requests.filter(r=>isOutstanding(r)&&priorityRank(r)===2).map(r=>r.id));
+    const added=seenUrgent.current===null?[]:newUrgentIds(seenUrgent.current,requests);
+    seenUrgent.current=current;
+    if(soundEnabled&&added.length&&!playAlert())setSoundError('Alert sound could not play. Check browser audio and keep visual alerts in view.');
+  },[requests,requestsReady,requestsError,isAuthenticated,soundEnabled]);
+  useEffect(()=>{
+    if(activeTab!=='requests'||!focusedRequest)return;
+    document.getElementById('request-card-'+focusedRequest)?.scrollIntoView({block:'center',behavior:'smooth'});
+    document.getElementById('request-card-'+focusedRequest)?.focus({preventScroll:true});
+  },[activeTab,focusedRequest,requestStatusFilter,departmentFilter]);
 
   // Load Sessions
   useEffect(() => {
@@ -723,19 +761,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
     await persistLocations(next);
   };
 
+  const openUrgent=requests.filter(r=>isOutstanding(r)&&priorityRank(r)===2).sort(compareRequests);
+  const openHigh=requests.filter(r=>isOutstanding(r)&&priorityRank(r)===1);
+  const priorities=outstandingPriorities(requests);
+  const goToRequest=(id:string)=>{setRequestStatusFilter('open');setDepartmentFilter('All');setFocusedRequest(id);setActiveTab('requests');requestAnimationFrame(()=>{const node=document.getElementById('request-card-'+id);node?.scrollIntoView({block:'center'});node?.focus({preventScroll:true});});};
+  const needsAttention=(s:Session)=>(priorities.get(s.id)||0)>0||s.status==='awaiting_human'||s.status==='escalated'||s.isUnread;
   const filteredSessions = sessions.filter((s) => {
     if (inboxFilter === 'attention') {
-      return s.status === 'awaiting_human' || s.status === 'escalated' || s.isUnread;
+      return needsAttention(s);
     }
     if (inboxFilter === 'ai') return s.status === 'active';
     if (inboxFilter === 'staff') return s.status === 'staff_controlled';
     if (inboxFilter === 'resolved') return s.status === 'completed';
     return true;
-  });
+  }).sort((a,b)=>compareSessions(a,b,priorities));
 
-  const attentionCount = sessions.filter(
-    (s) => s.status === 'awaiting_human' || s.status === 'escalated' || s.isUnread
-  ).length;
+  const attentionCount = sessions.filter(needsAttention).length;
 
   const openRequestsCount = requests.filter(
     (r) => !['completed', 'cancelled'].includes(r.status)
@@ -750,7 +791,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       if (dept !== departmentFilter) return false;
     }
     return true;
-  });
+  }).sort(compareRequests);
 
   const departments = [
     'All',
@@ -845,7 +886,22 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
       </aside>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden min-w-0">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <div className="shrink-0 border-b bg-white px-4 py-2 flex flex-wrap items-center gap-3 text-xs">
+          <span className="font-semibold">Priority operations</span>
+          <span className="text-red-700 font-semibold">{openUrgent.length} urgent</span>
+          <span className="text-amber-800">{openHigh.length} high priority</span>
+          <span className="text-slate-600">{openRequestsCount-openUrgent.length-openHigh.length} routine</span>
+          <button type="button" aria-pressed={soundEnabled} onClick={toggleSound} className="ml-auto border rounded px-2 py-1">{soundEnabled?'Alert sound on':'Enable alert sound'}</button>
+          {soundError&&<span role="status" className="text-amber-800">{soundError}</span>}
+        </div>
+        {(!requestsReady||requestsError)&&<div role="status" className="shrink-0 bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs">Request data not confirmed live. Check connection; do not rely on this console for emergency notification.</div>}
+        {openUrgent.length>0&&<section aria-label="Unresolved urgent requests" className="shrink-0 bg-red-50 border-b-2 border-red-600 px-4 py-3 text-red-900">
+          <h3 className="font-bold text-sm" role="status">{openUrgent.length} unresolved urgent {openUrgent.length===1?'request':'requests'} — immediate staff attention required</h3>
+          <div className="max-h-28 overflow-y-auto mt-1 space-y-1">{openUrgent.map(r=><button key={r.id} type="button" onClick={()=>goToRequest(r.id)} className="block text-left text-xs underline font-medium">#{r.referenceCode||r.id.slice(0,8)} · {r.roomNumber||'Location needed'} · {r.item||r.category} · {r.department||r.category} · {REQUEST_STATUS_LABELS[r.status]||r.status}</button>)}</div>
+          <p className="text-xs mt-1">Follow hotel emergency procedures; this is not an emergency dispatch system.</p>
+        </section>}
+        <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">
         {canConfigure && activeTab === 'insights' && <Insights key={hotelId} hotelId={hotelId} targets={hotelConfig?.slas || null} requests={requests} sessions={sessions} ready={sessionsReady && requestsReady} error={sessionsError || requestsError} />}
         {canManageTeam && activeTab === 'team' && <TeamManagement key={hotelId} hotelId={hotelId} />}
         {/* TAB 1: LIVE INBOX */}
@@ -928,7 +984,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                           >
                             {statusLabel}
                           </span>
-                          {s.status==='staff_controlled'&&s.escalationSeverity&&s.isUnread&&<span className="font-semibold text-red-700">{s.escalationSeverity==='critical'?'Urgent alert':'Priority alert'}</span>}
+                          {(priorities.get(s.id)||0)>0&&<span className={`font-semibold ${(priorities.get(s.id)||0)===2?'text-red-700':'text-amber-800'}`}>{(priorities.get(s.id)||0)===2?'Urgent alert':'Priority alert'}</span>}
                           <span className="font-mono" title={s.id}>#{s.id.slice(0, 8)}</span>
                           {s.guestLanguage && (
                             <>
@@ -986,9 +1042,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                         {selectedSession.assignedStaffEmail
                           ? ` · Assigned to ${selectedSession.assignedStaffEmail}`
                           : ''}
-                        {selectedSession.escalationReason
-                          ? ` · Alert: ${selectedSession.escalationReason}`
-                          : ''}
+                        {(priorities.get(selectedSession.id)||0)>0 ? ` · ${priorities.get(selectedSession.id)===2?'Urgent':'High-priority'} request outstanding` : ''}
                       </div>
                     </div>
 
@@ -1255,7 +1309,9 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                     return (
                       <div
                         key={req.id}
-                        className="bg-white p-4 rounded-xl border border-slate-200 flex flex-wrap justify-between items-start gap-4"
+                        id={'request-card-'+req.id}
+                        tabIndex={-1}
+                        className={`bg-white p-4 rounded-xl border flex flex-wrap justify-between items-start gap-4 ${isOutstanding(req)&&priorityRank(req)===2?'border-red-500 border-l-4':isOutstanding(req)&&priorityRank(req)===1?'border-amber-400 border-l-4':'border-slate-200'} ${focusedRequest===req.id?'ring-2 ring-indigo-400':''}`}
                       >
                         <div className="min-w-0 flex-1 space-y-1">
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -1833,6 +1889,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );
