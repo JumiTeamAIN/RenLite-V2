@@ -1,10 +1,10 @@
 import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
-import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
+import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,simpleDiningProposal,cartPreparationReply,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
 export type ChatCartSnapshot={count:number;guestCount:number;room:string;currency:string;subtotal:number;lines:{name:string;quantity:number;choices:string[];total:number}[];review:ReturnType<typeof reviewCart>|null;quoteId:string;receipt:string;uncertain:boolean;busy:boolean;error:string};
-export type GuestDiningHandle={chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
+export type GuestDiningHandle={tryExplicitAdd:(text:string)=>Promise<string|null>;tryPreparationEdit:(text:string)=>Promise<string|null>;chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
 export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void;onCartSnapshot?:(snapshot:ChatCartSnapshot)=>void}>(({hotelId,sessionId,visible,onSubmitted,onCartSnapshot},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
@@ -99,7 +99,25 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
    }
    return 'Review your cart.';
  }
- React.useImperativeHandle(ref,()=>({chatCommand,addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
+ async function tryExplicitAdd(text:string):Promise<string|null>{
+   if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
+   const g=generation.current;
+   const r=await api({});
+   if(g!==generation.current)throw Error('Dining session changed. Please try again.');
+   const p=simpleDiningProposal(r.menu,text);
+   if(!p)return null;
+   const item=(r.menu as DiningMenu).items.find(x=>x.id===p.itemId);
+   if(!item||modifierGroups(item).length)return null;
+   const name=await addChatItem(p.itemId,{},undefined,p.quantity);
+   return p.quantity+' × '+name+' added to your cart. No order has been submitted.';
+ }
+ async function tryPreparationEdit(text:string):Promise<string|null>{
+   if(busy||uncertain||submitting.current||chatAdding.current||!lines.length)return null;
+   const command=cartPreparationReply(menu,lines,text);
+   if(!command)return null;
+   return chatCommand(command);
+ }
+ React.useImperativeHandle(ref,()=>({tryExplicitAdd,tryPreparationEdit,chatCommand,addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
  async function preview(){
    if(uncertain||submitting.current)return 'Please resolve the pending confirmation first.';
    const g=generation.current;setBusy(true);setError('');setReview(null);setQuoteId('');
