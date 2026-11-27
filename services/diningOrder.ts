@@ -18,7 +18,8 @@ export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguou
    if(/\b(hours|time|open|close|available|number|phone|cost|charge|fee)\b/.test(t)&&!/\b(order|menu|i would like|i want|i'd like)\b/.test(t))return 'other';
    return 'dining';
  }
- if(/\b(i (want|would like)|i'd like|can i (have|get|order)|please bring|order)\b/.test(t)&&Boolean(matchDiningItem(t,items)))return 'dining';
+ if(/\b(something to drink|what (drinks|beverages)|drink options)\b/.test(t))return 'dining';
+ if(/\b(i (want|would like|will take)|i'd like|i'll (take|have)|can i (have|get|order)|please bring|order)\b/.test(t)&&Boolean(matchDiningItem(t,items)))return 'dining';
  if(/\b(i (want|would like)|i'd like|can i (have|get|order)|please bring)\b.*\b(burger|cheeseburger|steak|pizza)\b/.test(t))return 'dining';
  return 'other';
 }
@@ -48,6 +49,7 @@ export function reviewCart(menu:DiningMenu,lines:CartLine[],guestCount:number){
 }
 export function diningReply(menu:DiningMenu,text:string){
  const requested=matchDiningItem(text,menu.items);
+ const drinkInquiry=/\b(something to drink|what (drinks|beverages)|drink options)\b/i.test(text);
  if(!menu.enabled)return 'Online room service ordering is not currently available. Please contact the front desk to confirm dining options. No order has been placed.';
  if(requested?.soldOut)return 'I’m sorry, '+requested.name+' is currently sold out. Please browse Dining for available alternatives. No order has been placed.';
  const price=(item:MenuItem)=>menu.currency+' '+((item.priceCents??0)/100).toFixed(2);
@@ -57,6 +59,7 @@ export function diningReply(menu:DiningMenu,text:string){
    const extra=menu.items.find(x=>requested.upsells.includes(x.id)&&orderable(x));
    return 'Certainly! Our '+requested.name+' is '+price(requested)+'. '+(requested.description?requested.description+' ':'')+(options?'We offer these preparation choices: '+options+'. ':'')+(extra?'Would '+extra.name+' ('+price(extra)+') go well with your meal? ':'')+'Use the Add to cart button below, or open Dining to customize your selections and confirm your order when ready. No order has been placed.';
  }
+ if(drinkInquiry){const drinks=menu.items.filter(x=>orderable(x)&&/drink|beverage|juice|coffee|tea/i.test(x.category)).slice(0,6);if(drinks.length)return 'Certainly! We have '+drinks.map(x=>x.name+' ('+price(x)+')').join(', ')+'. Which would you prefer?';}
  const categories=[...new Set(menu.items.filter(orderable).map(x=>x.category))].slice(0,5);
  return 'Of course! I’d be happy to help with in-room dining. '+(categories.length?'We have '+categories.join(', ')+'. ':'')+'What are you in the mood for? You can also browse Dining and confirm your order there. No order has been placed.';
 }
