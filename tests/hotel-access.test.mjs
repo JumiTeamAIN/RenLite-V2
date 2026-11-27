@@ -109,3 +109,14 @@ test('guest outage handoff and fallback notice can commit together; staff sees u
  if(snap.data().status!=='awaiting_human'||!snap.data().isUnread)throw Error('Missing handoff');
  await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','sessions','session1','messages','ai-outage')));
 });
+
+test('clients cannot forge or mutate server-owned dining tickets',async()=>{
+ const guest=db('guestA',{firebase:{sign_in_provider:'anonymous'}}),staff=db('agent');
+ const payload={guestUid:'guestA',sessionId:'session1',item:'Room service order',category:'Room Service',roomNumber:'101',status:'pending',createdAt:serverTimestamp(),lastUpdated:serverTimestamp()};
+ await assertFails(setDoc(doc(guest,'hotels','ownerA','requests','dining-fake'),payload));
+ await assertFails(setDoc(doc(staff,'hotels','ownerA','requests','dining-fake'),payload));
+ await env.withSecurityRulesDisabled(async ctx=>{await setDoc(doc(ctx.firestore(),'hotels','ownerA','requests','dining-real'),{...payload,createdAt:Timestamp.now(),lastUpdated:Timestamp.now(),diningOrder:{subtotalCents:3600}});});
+ await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','requests','dining-real')));
+ await assertFails(updateDoc(doc(staff,'hotels','ownerA','requests','dining-real'),{status:'completed',lastUpdated:serverTimestamp()}));
+ await assertFails(updateDoc(doc(guest,'hotels','ownerA','requests','dining-real'),{description:'Changed',lastUpdated:serverTimestamp()}));
+});
