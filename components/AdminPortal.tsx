@@ -1,3 +1,4 @@
+import {DiningMenuManager} from './DiningMenuManager';
 import {isOutstanding,priorityRank,compareRequests,outstandingPriorities,compareSessions,newUrgentIds} from '../services/priorityOperations';
 import {extractFaqFile,reviewFaqs} from '../services/documentFaq';
 import {hasInvalidFaqText,type FaqDraft} from '../services/faqImport';
@@ -70,7 +71,7 @@ const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
 ];
 
 export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
-  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config' | 'team' | 'insights'>('inbox');
+  const [activeTab, setActiveTab] = useState<'inbox' | 'requests' | 'locations' | 'config' | 'team' | 'insights' | 'dining'>('inbox');
   const [sessions, setSessions] = useState<Session[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [sessionsReady, setSessionsReady] = useState(false);
@@ -230,7 +231,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
   const canManageTeam = staffRole === 'admin' || staffRole === 'legacy';
 
   useEffect(() => {
-    if ((!canConfigure && ['locations','config','insights'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
+    if ((!canConfigure && ['locations','config','insights','dining'].includes(activeTab)) || (!canManageTeam && activeTab === 'team')) setActiveTab('inbox');
   }, [activeTab, canConfigure, canManageTeam]);
 
   // Load Config
@@ -873,6 +874,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
             Configuration
           </button>
           </>}
+          {canConfigure && <button type="button" onClick={()=>setActiveTab('dining')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='dining'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Dining Menu</button>}
           {canConfigure && <button type="button" onClick={()=>setActiveTab('insights')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='insights'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Insights</button>}
           {canManageTeam && <button type="button" onClick={()=>setActiveTab('team')} className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-medium ${activeTab==='team'?'bg-indigo-600 text-white':'text-slate-300 hover:bg-slate-800'}`}>Team Management</button>}
         </nav>
@@ -902,6 +904,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
           <p className="text-xs mt-1">Follow hotel emergency procedures; this is not an emergency dispatch system.</p>
         </section>}
         <div className="flex-1 flex overflow-hidden min-w-0 min-h-0">
+        {canConfigure && activeTab === 'dining' && <DiningMenuManager key={hotelId} hotelId={hotelId}/>}
         {canConfigure && activeTab === 'insights' && <Insights key={hotelId} hotelId={hotelId} targets={hotelConfig?.slas || null} requests={requests} sessions={sessions} ready={sessionsReady && requestsReady} error={sessionsError || requestsError} />}
         {canManageTeam && activeTab === 'team' && <TeamManagement key={hotelId} hotelId={hotelId} />}
         {/* TAB 1: LIVE INBOX */}
