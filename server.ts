@@ -940,12 +940,13 @@ async function startServer() {
         const result=await db.runTransaction(async tx=>{
           const [p,ss,snap,q,existing]=await Promise.all([tx.get(hotel),tx.get(session),tx.get(menuRef),tx.get(quoteRef),tx.get(ticket)]);
           const state=ss.data(),quote=q.data();
-          if(!p.exists||!guestAccessOpen(state,uid)||!quote||quote.guestUid!==uid)return {status:403,error:'Conversation or order review unavailable.'};
+          if(!p.exists)return {status:403,error:'Order unavailable.'};
           if(existing.exists){
             if(existing.data()?.guestUid!==uid||existing.data()?.sessionId!==sessionId)return {status:403,error:'Order unavailable.'};
             return {status:200,referenceCode:existing.data()?.referenceCode,requestId};
           }
-          if(state.status==='completed'||Date.now()-(quote.createdAt?.toMillis?.()||0)>15*60000||state.roomNumber!==quote.roomNumber||(snap.data()?.version||0)!==quote.menuVersion)return {status:409,error:'Menu or delivery location changed, or review expired. Review the order again.'};
+          if(!guestAccessOpen(state,uid)||!quote||quote.guestUid!==uid)return {status:403,error:'Conversation or order review unavailable.'};
+          if(state.status==='completed'||typeof state.roomNumber!=='string'||!state.roomNumber.trim()||['Pending room #','Location needed'].includes(state.roomNumber)||!['room','suite'].includes(state.locationType||'room')||Date.now()-(quote.createdAt?.toMillis?.()||0)>15*60000||state.roomNumber!==quote.roomNumber||(snap.data()?.version||0)!==quote.menuVersion)return {status:409,error:'Menu or delivery location changed, or review expired. Review the order again.'};
           const menu=parseDiningMenu(snap.data());
           if(!menu)return {status:409,error:'Menu unavailable. Review again.'};
           const review=reviewCart(menu,quote.lines,quote.guestCount);
