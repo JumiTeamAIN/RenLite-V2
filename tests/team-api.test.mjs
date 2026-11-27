@@ -115,6 +115,34 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await safetyCall(outageGuest,'fire')).status,403);
     await policyCall(dev,'model-policy',initial.data.policy);
     // Menu access and versioned changes use the existing isolated emulator accounts.
+    // Exercise the same menu setup helpers used by the administrator, then submit their output via the real API.
+    const {scanMenuChoices,verifiedModifierPrice}=await import('../services/diningMenu.ts');
+    const {modifierGroups,reviewCart}=await import('../services/diningOrder.ts');
+    const tender={id:'tender',name:'Chicken Tenders',category:'Late Night',description:'Fries, honey mustard or BBQ sauce',priceCents:1700,available:true,modifiers:[],upsells:[],allergens:''};
+    const sauce=scanMenuChoices(tender)[0];
+    assert.equal(sauce.origin,'menu-text');
+    assert.deepEqual(sauce.options,['honey mustard','BBQ sauce']);
+    assert.equal(verifiedModifierPrice('0'),0);
+    assert.equal(verifiedModifierPrice('6.50'),650);
+    assert.equal(verifiedModifierPrice(''),null);
+    assert.equal(verifiedModifierPrice('-1'),null);
+    assert.equal(verifiedModifierPrice('1.234'),null);
+    assert.equal(verifiedModifierPrice('10000.01'),null);
+    const configured={...tender,modifierGroups:[{id:'sauce',question:sauce.question,required:sauce.required,options:sauce.options.map(label=>({label,priceCents:verifiedModifierPrice('0')}))}]};
+    assert.equal(scanMenuChoices(configured).length,0);
+    assert.equal(modifierGroups(configured)[0].required,true);
+    const sauceMenu={currency:'USD',enabled:true,items:[configured]};
+    assert.ok('error' in reviewCart(sauceMenu,[{itemId:'tender',quantity:1,choices:{}}],1));
+    const sauceReview=reviewCart(sauceMenu,[{itemId:'tender',quantity:1,choices:{'custom-sauce':'BBQ sauce'}}],1);
+    assert.equal(sauceReview.subtotalCents,1700);
+    assert.equal(sauceReview.lines[0].choices[0].answer,'BBQ sauce');
+    for(const name of ['New York Strip','Marriott Burger']){
+      const draft=scanMenuChoices({...tender,name,description:'Served with fries'})[0];
+      assert.equal(draft.origin,'template');assert.ok(draft.options.includes('Medium well'));
+    }
+    assert.equal(scanMenuChoices({...tender,name:'Veggie Burger',description:'Served with fries'}).length,0);
+    assert.equal(scanMenuChoices({...tender,name:'Water',description:'Bottled water'}).length,0);
+    assert.deepEqual(scanMenuChoices({...tender,name:'Pasta',description:'Penne or fettuccine'})[0].options,['Penne','fettuccine']);
     const sampleMenu={currency:'USD',enabled:false,items:[{id:'burger',name:'Burger',category:'Entrees',description:'With fries',priceCents:2200,available:true,modifiers:[],upsells:[],allergens:''}]};
     async function dining(a,route,body){
       return callDining(a,route+'/'+owner.uid,body);

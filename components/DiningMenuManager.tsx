@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useRef} from 'react';
 import {auth} from '../services/firebase';
-import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,appendMenuDraft,parseModifierSuggestions,type ModifierSuggestion,type DiningMenu,type MenuItem} from '../services/diningMenu';
+import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,appendMenuDraft,parseModifierSuggestions,scanMenuChoices,verifiedModifierPrice,type LocalModifierDraft,type ModifierSuggestion,type DiningMenu,type MenuItem} from '../services/diningMenu';
 import {menuSource} from '../services/menuDocument';
 export function DiningMenuManager({hotelId}:{hotelId:string}){
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[version,setVersion]=useState(0),[ready,setReady]=useState(false),[busy,setBusy]=useState(false),[feedback,setFeedback]=useState(''),[dirty,setDirty]=useState(false);
@@ -8,7 +8,19 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  const generation=useRef(0);
  const [suggestions,setSuggestions]=useState<Record<string,{source:string;groups:ModifierSuggestion[]}>>({});
  const [draftPrices,setDraftPrices]=useState<Record<string,string>>({});
+ const [approvalFeedback,setApprovalFeedback]=useState<Record<string,string>>({});
  const sourceKey=(x:MenuItem)=>JSON.stringify([x.name,x.category,x.description]);
+ const [localDismissed,setLocalDismissed]=useState<Record<string,boolean>>({});
+ const localKey=(x:MenuItem,g:LocalModifierDraft)=>JSON.stringify([x.id,sourceKey(x),g.question,g.options]);
+ const visibleDrafts=(x:MenuItem)=>scanMenuChoices(x).filter(g=>!localDismissed[localKey(x,g)]);
+ function adoptDraft(x:MenuItem,g:LocalModifierDraft){
+   if((x.modifierGroups||[]).length>=10)return;
+   // Add editable choices only after affirmative staff confirmation.
+   if(!window.confirm('Confirm these choices are offered by the kitchen and included at no additional charge. If any price differs, cancel and use the manual or AI-assisted editor. Add to unsaved menu?'))return;
+   item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:g.question,required:g.required,options:g.options.map(label=>({label,priceCents:0}))}]});
+   setLocalDismissed(p=>({...p,[localKey(x,g)]:true}));
+   setFeedback('Choice group added to unsaved menu. Review it, then Save menu to publish.');
+ }
  async function suggest(x:MenuItem){
    if(busy||!ready||!x.name.trim())return;
    const g=generation.current;setBusy(true);setFeedback('');
@@ -27,14 +39,16 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
  const dismiss=(id:string,index:number)=>setSuggestions(prev=>({...prev,[id]:{...prev[id],groups:prev[id].groups.filter((_,i)=>i!==index)}}));
  function accept(x:MenuItem,index:number){
    const pending=suggestions[x.id],group=pending?.groups[index];
-   if(!group||pending.source!==sourceKey(x)||(x.modifierGroups||[]).length>=10)return;
+   if(!group||pending.source!==sourceKey(x))return;
+   if((x.modifierGroups||[]).length>=10){setApprovalFeedback(p=>({...p,[x.id]:'Maximum 10 custom groups reached. Remove a group first.'}));return;}
    const values=group.options.map((_,i)=>draftPrices[x.id+':'+index+':'+i]??'');
-   if(values.some(v=>!/^\\d{1,5}(?:\\.\\d{1,2})?$/.test(v)||Number(v)>10000)){setFeedback('Enter a verified additional price for every option, including 0 if included.');return;}
+   if(values.some(v=>verifiedModifierPrice(v)===null)){setApprovalFeedback(p=>({...p,[x.id]:'Enter a verified extra price for every option, or use Set all to 0 if every option is included.'}));return;}
    const norm=(s:string)=>s.trim().toLowerCase();
-   if((x.modifierGroups||[]).some(g=>norm(g.question)===norm(group.question))||x.modifiers.some(m=>norm(m.split('|')[0])===norm(group.question))){setFeedback('A choice group with this question already exists. Edit the existing group instead.');return;}
+   if((x.modifierGroups||[]).some(g=>norm(g.question)===norm(group.question))||x.modifiers.some(m=>norm(m.split('|')[0])===norm(group.question))){setApprovalFeedback(p=>({...p,[x.id]:'A group with this question already exists. Edit the existing group below.'}));return;}
    if(!window.confirm('Confirm the kitchen offers these options, the required/optional setting is correct, and all additional prices are verified. Add to unsaved menu?'))return;
-   item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:group.question,required:group.required,options:group.options.map((label,i)=>({label,priceCents:Math.round(Number(values[i])*100)}))}]});
+   item(x.id,{modifierGroups:[...(x.modifierGroups||[]),{id:crypto.randomUUID(),question:group.question,required:group.required,options:group.options.map((label,i)=>({label,priceCents:verifiedModifierPrice(values[i])!}))}]});
    clearSuggestion(x.id,index);
+   setApprovalFeedback(p=>({...p,[x.id]:'Approved and added below. Save menu to make these choices available to guests.'}));
    setFeedback('Choice group added to the unsaved menu. Edit as needed, then Save menu to publish.');
  }
  function clearSuggestion(id:string,index:number){
@@ -56,7 +70,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
    const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Request failed.');return data;
  }
  async function load(){
-   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');setSuggestions({});setDraftPrices({});
+   const g=++generation.current;setBusy(true);setReady(false);setFeedback('');setSuggestions({});setDraftPrices({});setLocalDismissed({});setApprovalFeedback({});
    try{const r=await api('menu');const m=parseDiningMenu(r.menu);if(!m)throw Error('Invalid saved menu.');if(g===generation.current){setMenu(m);setVersion(r.version);setDirty(false);setReady(true);}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Could not load menu.');}
    finally{if(g===generation.current)setBusy(false);}
@@ -78,14 +92,14 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
        const extracted=parseMenuExtraction(response.items);if(!extracted?.length)throw Error('No valid menu items in '+file.name);
        const merged=appendMenuDraft(next,extracted,()=>crypto.randomUUID());added+=merged.items.length-next.length;skipped+=merged.skipped;next=merged.items;
      }
-     if(g===generation.current){update({items:next});setFeedback(added+' draft items added; '+skipped+' duplicates skipped. Review every item, price, currency and available option. Imported items are unavailable by default. Nothing is saved until you save.');}
+     if(g===generation.current){update({items:next});setFeedback(added+' draft items added; '+skipped+' duplicates skipped. Review automatically detected choices below each item, price, currency and available option. Imported items are unavailable by default. Nothing is saved until you save.');}
    }catch(e){if(g===generation.current)setFeedback((e instanceof Error?e.message:'Import failed.')+' No draft items added from this batch.');}
    finally{if(g===generation.current){setBusy(false);if(fileRef.current)fileRef.current.value='';if(cameraRef.current)cameraRef.current.value='';}}
  }
  async function save(){
    const valid=parseDiningMenu(menu);if(!valid){setFeedback('Review missing names, prices, duplicate items, currency and modifiers. Enable at least one priced item before enabling dining.');return;}
    const g=generation.current;setBusy(true);setFeedback('');
-   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setFeedback('Menu saved. Guest ordering is available when enabled.');}}
+   try{const r=await api('menu',{menu:valid,version});if(g===generation.current){setMenu(r.menu);setVersion(r.version);setDirty(false);setApprovalFeedback({});setFeedback('Menu saved. Guest ordering is available when enabled.');}}
    catch(e){if(g===generation.current)setFeedback(e instanceof Error?e.message:'Save failed.');}
    finally{if(g===generation.current)setBusy(false);}
  }
@@ -102,21 +116,31 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      <input ref={cameraRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden onChange={e=>void importFiles(e.target.files)}/>
      <div className="flex flex-wrap gap-2"><button type="button" onClick={()=>cameraRef.current?.click()} className="border rounded-lg px-4 py-2">Take photo</button><button type="button" onClick={()=>fileRef.current?.click()} className="border rounded-lg px-4 py-2">Upload menu</button><button type="button" onClick={add} className="border rounded-lg px-4 py-2">Add item manually</button></div>
    </div>
-   <div className="bg-white border rounded-xl p-4 flex flex-wrap items-center gap-4"><label className="text-sm">Currency code <input className="border rounded p-2 w-24 uppercase" value={menu.currency} maxLength={3} onChange={e=>update({currency:e.target.value.toUpperCase()})}/></label><label className="text-sm"><input type="checkbox" checked={menu.enabled} onChange={e=>update({enabled:e.target.checked})}/> Enable guest dining orders</label><span className="text-xs text-slate-500">{menu.items.length}/150 items</span></div>
+   <div className="bg-white border rounded-xl p-4 flex flex-wrap items-center gap-4"><label className="text-sm">Currency code <input className="border rounded p-2 w-24 uppercase" value={menu.currency} maxLength={3} onChange={e=>update({currency:e.target.value.toUpperCase()})}/></label><label className="text-sm"><input type="checkbox" checked={menu.enabled} onChange={e=>update({enabled:e.target.checked})}/> Enable guest dining orders</label><span className="text-xs text-slate-500">{menu.items.length}/150 items</span><span className="text-sm text-indigo-700">{menu.items.reduce((n,x)=>n+visibleDrafts(x).length,0)} suggested choice groups to review</span></div>
    {menu.items.map(x=><div key={x.id} className="bg-white border rounded-xl p-4 space-y-3">
      <div className="flex justify-between items-center"><strong>{x.name||'New item'}</strong><button type="button" className="text-red-700 text-sm" onClick={()=>remove(x.id)}>Remove</button></div>
      <div className="grid sm:grid-cols-3 gap-3"><label className="text-sm">Name<input className={input} value={x.name} maxLength={150} onChange={e=>item(x.id,{name:e.target.value})}/></label><label className="text-sm">Category<input className={input} value={x.category} maxLength={80} onChange={e=>item(x.id,{category:e.target.value})}/></label><label className="text-sm">Price ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" value={x.priceCents===null?'':x.priceCents/100} onChange={e=>item(x.id,{priceCents:e.target.value===''?null:Math.round(Number(e.target.value)*100)})}/></label></div>
      <label className="block text-sm">Description<textarea className={input} value={x.description} maxLength={500} onChange={e=>item(x.id,{description:e.target.value})}/></label>
      <label className="block text-sm">Hotel-verified allergen information (unknown if blank)<input className={input} value={x.allergens} maxLength={300} onChange={e=>item(x.id,{allergens:e.target.value})}/></label>
      <label className="block text-sm">Required preparation choices (one group per line: question | option | option)<textarea className={input} placeholder={'Cooking temperature | Medium rare | Medium | Medium well | Well done'} value={x.modifiers.join('\n')} onChange={e=>item(x.id,{modifiers:e.target.value.split('\n').slice(0,10)})}/></label>
+     {visibleDrafts(x).length>0&&<div className="border border-amber-300 bg-amber-50 rounded-lg p-3 space-y-3">
+       <strong className="text-sm">Customization review needed</strong>
+       {visibleDrafts(x).map(g=><div key={localKey(x,g)} className="border bg-white rounded p-3 space-y-2">
+         <p className="text-xs text-slate-600">{g.origin==='menu-text'?'Detected menu text: '+g.evidence:g.evidence}</p>
+         <p className="font-medium text-sm">{g.question}</p><p className="text-sm">{g.options.join(' / ')}</p>
+         <div className="flex flex-wrap gap-2"><button type="button" disabled={(x.modifierGroups||[]).length>=10} className="bg-indigo-600 text-white rounded px-3 py-2 text-sm disabled:opacity-50" onClick={()=>adoptDraft(x,g)}>Approve as included choices</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>setLocalDismissed(p=>({...p,[localKey(x,g)]:true}))}>Dismiss for now</button></div>
+         <p className="text-xs text-slate-600">Verify all choices and charges. Approval adds an editable group to the unsaved menu.</p>
+       </div>)}
+     </div>}
      <div className="border border-indigo-200 rounded-lg p-3 space-y-3">
        <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">AI-assisted preparation and add-ons</strong><button type="button" disabled={!x.name.trim()||busy} className="border rounded px-3 py-2 text-sm text-indigo-700 disabled:opacity-50" onClick={()=>void suggest(x)}>Suggest customization options</button></div>
+       {approvalFeedback[x.id]&&<p role="status" className="border border-indigo-200 rounded p-2 text-sm bg-indigo-50">{approvalFeedback[x.id]}</p>}
        <p className="text-xs text-slate-600">AI suggestions are not verified kitchen offerings. Review and approve each group, confirm all additional prices, and save the menu before guests see them. One AI request per item.</p>
        {suggestions[x.id]&&suggestions[x.id].source!==sourceKey(x)&&<p className="text-xs text-amber-700">Item details changed. Generate fresh suggestions.</p>}
        {suggestions[x.id]?.source===sourceKey(x)&&suggestions[x.id].groups.map((g,gi)=><div key={gi} className="border rounded p-3 space-y-2">
          <p className="font-medium text-sm">{g.question} <span className="text-xs text-slate-500">({g.required?'Suggested required':'Suggested optional'})</span></p>
          {g.options.map((option,oi)=><div key={oi} className="flex items-center gap-2"><span className="flex-1 text-sm">{option}</span><label className="w-36 text-xs">Extra ({menu.currency})<input className={input} type="number" min="0" max="10000" step=".01" placeholder="Verify price" value={draftPrices[x.id+':'+gi+':'+oi]??''} onChange={e=>setDraftPrices(p=>({...p,[x.id+':'+gi+':'+oi]:e.target.value}))}/></label></div>)}
-         <div className="flex gap-2"><button type="button" className="bg-indigo-600 text-white rounded px-3 py-2 text-sm" onClick={()=>accept(x,gi)}>Approve group</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>clearSuggestion(x.id,gi)}>Dismiss</button></div>
+         <div className="flex flex-wrap gap-2"><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>{setDraftPrices(p=>({...p,...Object.fromEntries(g.options.map((_,oi)=>[x.id+':'+gi+':'+oi,'0']))}));setApprovalFeedback(p=>({...p,[x.id]:'All extra prices set to 0. Verify these choices are included before approving.'}));}}>Set all to 0 (included)</button><button type="button" className="bg-indigo-600 text-white rounded px-3 py-2 text-sm" onClick={()=>accept(x,gi)}>Approve group</button><button type="button" className="border rounded px-3 py-2 text-sm" onClick={()=>clearSuggestion(x.id,gi)}>Dismiss</button></div>
        </div>)}
      </div>
      <div className="border rounded-lg p-3 space-y-3">
@@ -136,7 +160,7 @@ export function DiningMenuManager({hotelId}:{hotelId:string}){
      <label className="block text-sm">Suggested upsell items<select multiple className={input} value={x.upsells} onChange={e=>item(x.id,{upsells:Array.from(e.target.selectedOptions,o=>o.value).slice(0,10)})}>{menu.items.filter(y=>y.id!==x.id&&y.name).map(y=><option key={y.id} value={y.id}>{y.name}</option>)}</select></label>
      <label className="text-sm"><input type="checkbox" disabled={x.priceCents===null} checked={x.available} onChange={e=>item(x.id,{available:e.target.checked})}/> Approved for guest menu</label>
    </div>)}
-   <button type="button" disabled={!dirty||busy} onClick={()=>void save()} className="bg-indigo-600 text-white px-5 py-3 rounded-lg font-semibold disabled:opacity-50">{busy?'Working…':'Save menu'}</button>{dirty&&<span className="ml-3 text-sm text-amber-700">Unsaved changes</span>}
+   <div className="sticky bottom-0 bg-white border-t p-3 shadow-sm flex flex-wrap items-center gap-2"><button type="button" disabled={!dirty||busy} onClick={()=>void save()} className="bg-indigo-600 text-white px-5 py-3 rounded-lg font-semibold disabled:opacity-50">{busy?'Working…':'Save menu'}</button>{dirty&&<span className="ml-3 text-sm text-amber-700">Unsaved changes — guests cannot see them until saved.</span>}</div>
    </fieldset>}
  </div></section>;
 }
