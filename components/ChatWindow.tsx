@@ -17,6 +17,7 @@ import { auth, db, signInGuest, OperationType, handleFirestoreError } from '../s
 import { sendMessageToAI, translateMessageToEnglish } from '../services/clientAi';
 import {
   QUICK_REQUEST_TEMPLATES,
+  detectDeterministicSafetySignal,
   QuickRequestTemplate,
   normalizeLocationMatch,
 } from '../services/hotelLogic';
@@ -400,6 +401,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       messageSaved = true;
       setPendingGuestMessages((prev) => prev.filter((p) => p.localId !== localId));
 
+      // Safety check precedes both normal AI and staff-owned paths.
+      if(detectDeterministicSafetySignal(text).triggered){
+        try{
+          const token=await auth.currentUser?.getIdToken();
+          const response=await fetch('/api/guest/safety-check',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({hotelId,sessionId,guestMessageId:msgRef.id}),signal:AbortSignal.timeout(10000)});
+          if(!response.ok||!(await response.json()).triggered)throw Error('Safety alert not confirmed');
+        }catch{
+          setChatError('Your message was saved, but we could not confirm an urgent alert. Contact the front desk directly; in immediate danger contact local emergency services now.');
+        }
+        return;
+      }
       if (!isStaffControlled) {
         await sendMessageToAI(hotelId, sessionId, msgRef.id);
       } else {
