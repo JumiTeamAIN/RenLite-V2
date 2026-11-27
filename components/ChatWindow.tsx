@@ -1,4 +1,4 @@
-import {GuestDining} from './GuestDining';
+import {GuestDining,type GuestDiningHandle} from './GuestDining';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -15,7 +15,7 @@ import {
   runTransaction,
 } from 'firebase/firestore';
 import { auth, db, signInGuest, OperationType, handleFirestoreError } from '../services/firebase';
-import { sendMessageToAI, translateMessageToEnglish } from '../services/clientAi';
+import { sendMessageToAI, translateMessageToEnglish, type DiningSuggestion } from '../services/clientAi';
 import {
   QUICK_REQUEST_TEMPLATES,
   detectDeterministicSafetySignal,
@@ -95,6 +95,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
 
   const [activeView, setActiveView] = useState<'chat' | 'quick' | 'requests' | 'dining'>('chat');
   const [inputText, setInputText] = useState('');
+  const diningRef=useRef<GuestDiningHandle>(null);
+  const [diningSuggestion,setDiningSuggestion]=useState<(DiningSuggestion & {scope:string})|null>(null);
+  const [diningChatNotice,setDiningChatNotice]=useState('');
+  const [diningChatBusy,setDiningChatBusy]=useState(false);
+  const diningScope=hotelId+':'+sessionId;
+  const diningScopeRef=useRef(diningScope);
+  diningScopeRef.current=diningScope;
+  const diningActionBusy=useRef(false);
+  useEffect(()=>{setDiningSuggestion(null);setDiningChatNotice('');},[diningScope]);
+  async function addSuggestedDiningItem(){
+    if(!diningSuggestion||diningSuggestion.scope!==diningScope||!diningRef.current||diningActionBusy.current||['staff_controlled','awaiting_human','completed'].includes(session?.status||''))return;
+    diningActionBusy.current=true;setDiningChatBusy(true);setDiningChatNotice('');
+    try{
+      const name=await diningRef.current.addFromChat(diningSuggestion.itemId);
+      if(diningScopeRef.current===diningScope){setDiningChatNotice(name+' added to your cart. No order has been placed.');setDiningSuggestion(null);}
+    }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add item. Try Dining.');}
+    finally{diningActionBusy.current=false;setDiningChatBusy(false);}
+  }
   const [isThinking, setIsThinking] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -369,6 +387,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
     const msgRef = doc(collection(db, `hotels/${hotelId}/sessions/${sessionId}/messages`));
     const localId = msgRef.id;
     setInputText('');
+    setDiningSuggestion(null);setDiningChatNotice('');
     setChatError(null);
     setPendingGuestMessages((prev) => [...prev, { localId, text }]);
 
@@ -414,7 +433,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         return;
       }
       if (!isStaffControlled) {
-        await sendMessageToAI(hotelId, sessionId, msgRef.id);
+        const suggestion=await sendMessageToAI(hotelId, sessionId, msgRef.id);
+        if(suggestion&&diningScopeRef.current===diningScope)setDiningSuggestion({...suggestion,scope:diningScope});
       } else {
         // Translate guest message to English for staff even during active human takeover
         const translated = await translateMessageToEnglish(
@@ -802,7 +822,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       </header>
 
       {/* VIEW 1: CHAT */}
-      {sessionId&&<GuestDining key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'}/>}
+      {sessionId&&<GuestDining ref={diningRef} key={hotelId+':'+sessionId} hotelId={hotelId} sessionId={sessionId} visible={activeView==='dining'}/>}
 
       {activeView === 'chat' && (
         <>
@@ -936,6 +956,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
           </div>
 
           <div className="bg-white p-3 border-t border-slate-200 shrink-0">
+            {diningSuggestion?.scope===diningScope&&!['staff_controlled','awaiting_human','completed'].includes(session?.status||'')&&<div className="mb-2 rounded-lg border border-indigo-200 p-2 text-sm"><button type="button" disabled={diningChatBusy||isThinking||isSending} onClick={()=>void addSuggestedDiningItem()} className="bg-indigo-600 text-white rounded-lg px-3 py-2 disabled:opacity-50">{diningChatBusy?'Adding…':'Add '+diningSuggestion.name+' to cart'}</button></div>}
+            {diningChatNotice&&<div role="status" className="mb-2 text-xs text-slate-700">{diningChatNotice} <button type="button" onClick={()=>setActiveView('dining')} className="text-indigo-700 underline">View dining cart</button></div>}
             {session?.status === 'staff_controlled' && (
               <div className="text-[11px] text-slate-500 mb-2 px-1">
                 Direct staff chat is active — a hotel associate is replying here.

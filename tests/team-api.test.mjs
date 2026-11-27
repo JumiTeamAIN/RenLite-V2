@@ -177,6 +177,8 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await guestDining(outageGuest,{...cart,lines:[{itemId:'burger',quantity:2,choices:{}}]})).status,409);
     const startDining=await outageTurn('dining-intent','I would like room service.');
     assert.equal(startDining.status,200);assert.equal(startDining.data.requests.length,0);assert.match(startDining.data.text,/No order has been placed/);
+    const itemSuggestion=await outageTurn('dining-suggestion','I would like to order a burger.');
+    assert.equal(itemSuggestion.status,200);assert.equal(itemSuggestion.data.requests.length,0);assert.equal(itemSuggestion.data.diningSuggestion.itemId,'burger');assert.match(itemSuggestion.data.text,/No order has been placed/);
 
     assert.equal((await dining(other,'availability')).status,403);
     await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false});
@@ -186,7 +188,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await guestDining(outageGuest,cart)).status,409);
     assert.equal((await guestDining(outageGuest,{confirmQuoteId:staleQuote})).status,409);
     const soldOutTurn=await outageTurn('dining-sold-out','I would like a burger.');
-    assert.equal(soldOutTurn.status,200);assert.equal(soldOutTurn.data.requests.length,0);assert.match(soldOutTurn.data.text,/sold out/);
+    assert.equal(soldOutTurn.status,200);assert.equal(soldOutTurn.data.requests.length,0);assert.match(soldOutTurn.data.text,/sold out/);assert.equal(soldOutTurn.data.diningSuggestion,undefined);
 
     assert.equal((await dining(owner,'menu')).data.menu.items[0].priceCents,2200);
     await policyCall(dev,'model-policy',initial.data.policy);

@@ -1,5 +1,5 @@
-import {diningIntent,diningReply,reviewCart} from './services/diningOrder.ts';
-import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction} from './services/diningMenu.ts';
+import {diningIntent,diningReply,reviewCart,matchDiningItem} from './services/diningOrder.ts';
+import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,orderable} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
 import { DEFAULT_MODEL_POLICY, parseModelPolicy, candidateModels, courtesyReply, validModel, MODEL_IDS, type ModelPolicy } from './services/modelPolicy.ts';
@@ -1165,7 +1165,8 @@ async function startServer() {
         const intent=diningIntent(latestGuestMessage,diningMenu.items);
         if(intent!=='other'){
           const reply=intent==='ambiguous'?'Do you mean in-room dining (food and beverages) or housekeeping to clean your room? No request has been placed.':diningReply(diningMenu,latestGuestMessage);
-          res.json({text:reply,guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});return;
+          const suggested=intent==='dining'&&diningMenu.enabled?matchDiningItem(latestGuestMessage,diningMenu.items):undefined;
+          res.json({text:reply,guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[],...(suggested&&orderable(suggested)?{diningSuggestion:{itemId:suggested.id,name:suggested.name}}:{})});return;
         }
       }catch{if(diningIntent(latestGuestMessage)!=='other'){res.json({text:'Dining information is temporarily unavailable. Please contact the front desk. No order has been placed.',roomNumber:trustedSession?.roomNumber||'',requests:[]});return;}}
     }
