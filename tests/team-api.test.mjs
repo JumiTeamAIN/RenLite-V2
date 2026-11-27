@@ -186,7 +186,8 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     for(const invalid of [['Mushrooms','Mushrooms'],['Mushrooms','Pepperoni','Olives'],['Invented'],[42]]){
       assert.equal((await guestDining(outageGuest,{...multiCart,lines:[{...multiCart.lines[0],choices:{'0':'Medium','custom-toppings':invalid}}]})).status,409);
     }
-    const quoteId=reviewed.data.quoteId;
+    // Confirm the customized order itself, not the earlier plain-cart quote.
+    const quoteId=multiReview.data.quoteId;
     assert.ok(quoteId);
     assert.equal((await guestDining(other,{confirmQuoteId:quoteId})).status,403);
     const locationQuote=(await guestDining(outageGuest,cart)).data.quoteId;
@@ -207,7 +208,15 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     const orderRef=outageHotel.collection('requests').doc(submitted.data.requestId);
     const stored=(await orderRef.get()).data();
     assert.equal(stored.department,'Front Desk');
-    assert.equal(stored.diningOrder.subtotalCents,4400);
+    assert.equal(stored.diningOrder.subtotalCents,5200);
+    assert.equal(stored.diningOrder.lines[0].quantity,2);
+    assert.equal(stored.diningOrder.lines[0].unitPriceCents,2600);
+    assert.deepEqual(stored.diningOrder.lines[0].choices,[
+      {question:'Cooking temperature',answer:'Medium'},
+      {question:'Choose toppings',answer:'Mushrooms, Pepperoni',priceCents:400}
+    ]);
+    assert.match(stored.description,/Cooking temperature: Medium/);
+    assert.match(stored.description,/Choose toppings: Mushrooms, Pepperoni/);
     assert.equal(stored.roomNumber,'101');
     async function diningTransition(account,nextStatus){
       const response=await fetch(base+'/api/dining/staff-transition',{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({hotelId:owner.uid,requestId:submitted.data.requestId,nextStatus})});
@@ -219,6 +228,9 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(await diningTransition(owner,'in_progress'),200);
     assert.equal((await orderRef.get()).data().posEnteredBy,owner.uid);
     assert.equal(await diningTransition(owner,'completed'),200);
+    const fulfilled=(await orderRef.get()).data();
+    assert.equal(fulfilled.status,'completed');
+    assert.deepEqual(fulfilled.diningOrder,stored.diningOrder);
     const staleQuote=(await guestDining(outageGuest,cart)).data.quoteId;
     assert.equal((await guestDining(outageGuest,{...cart,lines:[{itemId:'burger',quantity:2,choices:{}}]})).status,409);
     const startDining=await outageTurn('dining-intent','I would like room service.');
