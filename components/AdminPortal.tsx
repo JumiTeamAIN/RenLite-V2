@@ -502,7 +502,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
         sender: 'system',
         ...(sess.guestUid ? { guestUid: sess.guestUid } : {}),
         staffUid: auth.currentUser.uid,
-        text: 'Ren Concierge is back online to assist you. You may continue chatting anytime.',
+        text: 'The hotel associate has returned this conversation to Ren Concierge. If automated assistance is unavailable, your message will be routed to staff.',
         timestamp: serverTimestamp(),
       });
     } catch (err) {
@@ -928,6 +928,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                           >
                             {statusLabel}
                           </span>
+                          {s.status==='staff_controlled'&&s.escalationSeverity&&s.isUnread&&<span className="font-semibold text-red-700">{s.escalationSeverity==='critical'?'Urgent alert':'Priority alert'}</span>}
                           <span className="font-mono" title={s.id}>#{s.id.slice(0, 8)}</span>
                           {s.guestLanguage && (
                             <>
