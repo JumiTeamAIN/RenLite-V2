@@ -103,6 +103,7 @@ export type RequestStatus =
 export interface Request {
   id: string;
   referenceCode?: string;
+  diningOrder?: {guestCount:number;currency:string;subtotalCents:number;quoteId:string;lines:{itemId:string;name:string;quantity:number;unitPriceCents:number;lineTotalCents:number;choices:{question:string;answer:string}[]}[]};
   sessionId: string;
   item: string;
   quantity?: number;
