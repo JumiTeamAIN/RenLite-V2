@@ -255,6 +255,9 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal(result.lines.length,2);assert.equal(result.lines[0].quantity,2);assert.equal(result.guestCount,2);
     assert.equal(reviewCart(dessertMenu,result.lines,result.guestCount).subtotalCents,4900);
     assert.equal(actionState.lines[0].quantity,1);
+    assert.equal(actionState.lines.length,1);
+    assert.equal(actionState.guestCount,1);
+    assert.deepEqual(actionState.lines[0].choices,{'0':'Medium'});
     assert.equal(applyDiningActions(dessertMenu,actionState,[{kind:'add',itemId:'juice',quantity:1,choices:{}},{kind:'add',itemId:'invented',quantity:1,choices:{}}]),null);
     assert.equal(applyDiningActions(dessertMenu,actionState,[{kind:'edit',index:0,itemId:'juice',quantity:3}]),null);
     assert.equal(applyDiningActions(dessertMenu,actionState,[{kind:'submit'}]),null);
