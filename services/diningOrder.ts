@@ -116,8 +116,14 @@ export function validateDiningProposals(menu:DiningMenu,raw:unknown):DiningPropo
  }
  return proposals;
 }
+// Generic food terms trigger local-search grounding too; explicit off-property intent
+// must be distinguished from an order for the hotel's own menu.
+export function explicitLocalDiningSearch(text:string){
+ return /\b(?:nearby|near here|near me|around here|in the area|off[- ]site|off[- ]property|outside (?:the|this) hotel|local restaurants?|restaurants? near|where (?:can|should) (?:i|we) (?:get|eat|find|order)|where to (?:eat|get|find)|recommend (?:a |some )?(?:restaurant|place))\b/i.test(text);
+}
 export function contextualDiningIntent(text:string,transcript:string,items:MenuItem[]){
  const t=text.toLowerCase().replace(/’/g,"'").trim();
+ if(explicitLocalDiningSearch(text))return false;
  if(/\b(?:help|emergency|allerg(?:y|ic|ies|en)|chok(?:e|ing)|manager|staff|front desk|complaint|refund|towel|housekeeping|clean|repair|broken|not working|cancel|remove|change|replace|instead|no longer|don't|do not|without)\b/i.test(t))return false;
  if(diningIntent(text,items)==='dining')return true;
  const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
