@@ -192,7 +192,7 @@ export function resolveCartEdit(menu:DiningMenu,lines:CartLine[],command:Extract
 export function explicitAddTarget(text:string):string|null{
  const t=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'').trim();
  const m=t.match(/^(?:(?:may|can|could|would) (?:i|you) |please )?add (.+?)(?: to (?:that|it|my (?:order|cart)|the (?:order|cart)))?(?:,? please)?$/);
- if(!m||!m[1]||/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove|towel|housekeeping|staff|manager|help|nearby)\b/.test(m[1]))return null;
+ if(!m||!m[1]||/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove|towels?|pillows?|blankets?|linens?|toiletries|housekeeping|staff|manager|help|nearby)\b/.test(m[1]))return null;
  return m[1];
 }
 const preferenceNorm=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
