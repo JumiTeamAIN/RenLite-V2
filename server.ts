@@ -1,4 +1,4 @@
-import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch} from './services/diningOrder.ts';
+import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch,explicitAddTarget} from './services/diningOrder.ts';
 import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,parseModifierSuggestions,orderable} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
@@ -1217,6 +1217,9 @@ async function startServer() {
             }
           }catch(e){console.warn('[dining-plan]',{outcome:'planner-unavailable',status:getHttpStatusFromError(e)});}
         }
+        if(canPlan&&explicitAddTarget(latestGuestMessage)&&!simple){
+          res.json({text:'I could not confirm that menu selection. Please check the available items in Dining or tell me the exact menu item. Nothing has been added or submitted.',guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});return;
+        }
         if(intent!=='other'&&canPlan){
           console.info('[dining-plan]',{outcome:'menu-fallback',localSearch:requiresLocalGrounding});
           const reply=intent==='ambiguous'?'Do you mean in-room dining (food and beverages) or housekeeping to clean your room? No request has been placed.':diningReply(diningMenu,latestGuestMessage);
@@ -1391,7 +1394,7 @@ STRICT RULES:
 - STRICT ANTI-HALLUCINATION RULE: Never invent, guess, or make up hotel policies, prices, operating hours, on-site amenities, OR local restaurant/business/attraction names (e.g., never invent fictional names like "Burger Barn", "Pizza Palace", "Taco Town", or "Fun Zone Arcade").
 - Every local business, restaurant, or attraction name you recommend MUST appear verbatim in either the Hotel Knowledge Base (FAQs) or VERIFIED LOCAL SEARCH RESULTS below. If neither contains verified businesses for the guest's question, honestly explain that live search could not verify suitable listings. Offer practical ways to search nearby, and offer Front Desk assistance as an optional alternative. Never imply a handoff was requested unless the guest explicitly asks for it.
 - Never claim that local emergency services (911/fire/police) have been dispatched. For immediate physical danger (fire, smoke, gas leak, medical emergency, violence), give clear safety guidance, advise contacting local emergency services immediately, and flag escalationTriggered=true with escalationSeverity="critical".
-- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining to review and explicitly confirm submission (or front desk if unavailable). Never treat chat text as an order confirmation. Only the Dining confirmation screen can submit an order. Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
+- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining to review and explicitly confirm submission (or front desk if unavailable). You cannot read or mutate the guest cart through this generic model. Never claim that an item, quantity or preparation preference has been added, removed, changed, noted or saved, and never summarize an unverified cart as fact. Only the structured dining workflow can confirm cart actions and submit a reviewed order. Do not recommend off-property restaurants unless the guest explicitly asks for them during a dining conversation. Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
 
 LAYER 2 — HOSPITALITY INTELLIGENCE & TONE:
 - Always reply in the SAME language the guest used in their latest message (e.g. Spanish -> Spanish, French -> French).
