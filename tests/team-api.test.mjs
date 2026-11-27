@@ -128,7 +128,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,200);
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,409);
     assert.equal((await dining(owner,'menu')).data.menu.items[0].priceCents,2200);
-    const guestMenu={...sampleMenu,enabled:true,items:[{...sampleMenu.items[0],modifiers:['Cooking temperature | Medium | Well done'],modifierGroups:[{id:'protein',question:'Add a protein',required:false,options:[{label:'Shrimp',priceCents:600}]}]}]};
+    const guestMenu={...sampleMenu,enabled:true,items:[{...sampleMenu.items[0],modifiers:['Cooking temperature | Medium | Well done'],modifierGroups:[{id:'protein',question:'Add a protein',required:false,options:[{label:'Shrimp',priceCents:600}]},{id:'toppings',question:'Choose toppings',required:false,minSelections:0,maxSelections:2,options:[{label:'Mushrooms',priceCents:150},{label:'Pepperoni',priceCents:250},{label:'Olives',priceCents:100}]}]}]};
     assert.equal((await dining(owner,'menu',{menu:guestMenu,version:1})).status,200);
     async function guestDining(account,body={}){
       const response=await fetch(base+'/api/dining/guest/'+owner.uid,{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({sessionId:'outage-session',...body})});
@@ -149,6 +149,15 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-protein':'Free shrimp'}}]})).status,409);
     assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-invented':'Shrimp'}}]})).status,409);
 
+    const multiCart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium','custom-toppings':['Mushrooms','Pepperoni']}}]};
+    const multiReview=await guestDining(outageGuest,multiCart);
+    assert.equal(multiReview.status,200);
+    assert.equal(multiReview.data.review.subtotalCents,5200);
+    assert.equal(multiReview.data.review.lines[0].choices[1].answer,'Mushrooms, Pepperoni');
+    assert.equal(multiReview.data.review.lines[0].choices[1].priceCents,400);
+    for(const invalid of [['Mushrooms','Mushrooms'],['Mushrooms','Pepperoni','Olives'],['Invented'],[42]]){
+      assert.equal((await guestDining(outageGuest,{...multiCart,lines:[{...multiCart.lines[0],choices:{'0':'Medium','custom-toppings':invalid}}]})).status,409);
+    }
     const quoteId=reviewed.data.quoteId;
     assert.ok(quoteId);
     assert.equal((await guestDining(other,{confirmQuoteId:quoteId})).status,403);
