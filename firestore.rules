@@ -390,6 +390,7 @@ service cloud.firestore {
           isValidId(hotelId) &&
           isValidId(requestId) &&
           !requestId.matches('^dining-.*') &&
+          !('diningOrder' in incoming()) &&
           isValidRequest(incoming()) &&
           incoming().status in ['pending', 'escalated'] &&
           incoming().createdAt == request.time &&
@@ -407,6 +408,9 @@ service cloud.firestore {
         allow update: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
+          !requestId.matches('^dining-.*') &&
+          !('diningOrder' in existing()) &&
+          !('diningOrder' in incoming()) &&
           isValidRequest(incoming()) &&
           incoming().sessionId == existing().sessionId &&
           incoming().createdAt == existing().createdAt &&
