@@ -469,6 +469,47 @@ async function startServer() {
     const [p,m]=await Promise.all([hotel.get(),hotel.collection('members').doc(user.uid).get()]);
     return p.exists&&(teamAdmin(user.uid,hotelId,true,m.data(),user.email)||(m.data()?.active===true&&m.data()?.role==='manager'));
   };
+  // Active hotel staff may change temporary availability, never prices or approval.
+  app.get('/api/dining/availability/:hotelId',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    const user=await verifiedStaff(req),hotelId=req.params.hotelId;
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    if(!validHotelId(hotelId)){res.status(400).json({error:'Invalid hotel.'});return;}
+    try{
+      const hotel=teamDb().collection('hotels').doc(hotelId);
+      const [p,m,snap]=await Promise.all([hotel.get(),hotel.collection('members').doc(user.uid).get(),hotel.collection('dining').doc('menu').get()]);
+      const member=m.data();
+      if(!p.exists||!(teamAdmin(user.uid,hotelId,true,member,user.email)||(member?.active===true&&['manager','associate'].includes(member.role)))){res.status(403).json({error:'Hotel staff access required.'});return;}
+      const menu=snap.exists?parseDiningMenu(snap.data()):EMPTY_MENU;
+      if(!menu){res.status(503).json({error:'Menu requires review.'});return;}
+      res.json({items:menu.items.filter(x=>x.available).map(x=>({id:x.id,name:x.name,category:x.category,soldOut:x.soldOut===true})),version:snap.data()?.version||0});
+    }catch{res.status(503).json({error:'Availability unavailable.'});}
+  });
+  app.post('/api/dining/availability/:hotelId',async(req,res)=>{
+    const user=await verifiedStaff(req),hotelId=req.params.hotelId;
+    if(!user){res.status(401).json({error:'Verified staff sign-in required.'});return;}
+    const {itemId,soldOut,version,reason=''}=req.body||{};
+    if(!validHotelId(hotelId)||typeof itemId!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(itemId)||typeof soldOut!=='boolean'||!Number.isSafeInteger(version)||version<0||typeof reason!=='string'||reason.length>200){res.status(400).json({error:'Invalid availability update.'});return;}
+    try{
+      const db=teamDb(),hotel=db.collection('hotels').doc(hotelId),ref=hotel.collection('dining').doc('menu'),audit=hotel.collection('diningAvailabilityAudit').doc();
+      const result=await db.runTransaction(async tx=>{
+        const [p,m,snap]=await Promise.all([tx.get(hotel),tx.get(hotel.collection('members').doc(user.uid)),tx.get(ref)]);
+        const member=m.data();
+        if(!p.exists||!(teamAdmin(user.uid,hotelId,true,member,user.email)||(member?.active===true&&['manager','associate'].includes(member.role))))return 403;
+        if((snap.data()?.version||0)!==version)return 409;
+        const menu=parseDiningMenu(snap.data()),item=menu?.items.find(x=>x.id===itemId&&x.available);
+        if(!menu||!item)return 404;
+        if(Boolean(item.soldOut)===soldOut)return 200;
+        item.soldOut=soldOut;
+        tx.update(ref,{items:menu.items,version:version+1,updatedAt:FieldValue.serverTimestamp(),updatedBy:user.uid});
+        tx.set(audit,{itemId,itemName:item.name,soldOut,reason:reason.trim(),staffUid:user.uid,createdAt:FieldValue.serverTimestamp()});
+        return 200;
+      });
+      if(result!==200){res.status(result).json({error:result===409?'Menu changed. Refresh availability before trying again.':result===404?'Approved item not found.':'Hotel staff access required.'});return;}
+      res.json({ok:true});
+    }catch{res.status(503).json({error:'Could not update availability.'});}
+  });
+
   app.get('/api/dining/menu/:hotelId',async(req,res)=>{
     res.set('Cache-Control','no-store');
     const user=await verifiedStaff(req),hotelId=req.params.hotelId;
