@@ -146,7 +146,8 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  async function planChatActions(messageId:string,pending:CartLine|null,context:string):Promise<ChatActionOutcome>{
    if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
    const g=generation.current,state={lines,guestCount,pending};
-   chatAdding.current=true;setBusy(true);
+   // Any unresolved conversational request can invalidate the guest's earlier review.
+   setReview(null);setQuoteId('');chatAdding.current=true;setBusy(true);
    try{
      const user=auth.currentUser;if(!user)throw Error('Sign in again.');
      const response=await fetch('/api/dining/plan/'+encodeURIComponent(hotelId),{method:'POST',headers:{Authorization:'Bearer '+await user.getIdToken(),'Content-Type':'application/json'},body:JSON.stringify({sessionId,guestMessageId:messageId,state,context}),signal:AbortSignal.timeout(35000)});
