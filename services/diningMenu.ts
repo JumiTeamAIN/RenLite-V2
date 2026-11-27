@@ -55,3 +55,18 @@ export function appendMenuDraft(existing:MenuItem[],incoming:ExtractedMenuItem[]
 }
 
 export const orderable=(item:MenuItem)=>item.available&&!item.soldOut&&item.priceCents!==null;
+
+export type ModifierSuggestion={question:string;required:boolean;options:string[]};
+// Suggestions are deliberately separate from published modifiers: no price or availability claims.
+export function parseModifierSuggestions(raw:unknown):ModifierSuggestion[]|null{
+ if(!Array.isArray(raw)||raw.length>6)return null;
+ const result:ModifierSuggestion[]=[],questions=new Set<string>();
+ for(const g of raw){
+   const question=clean(g?.question,150);
+   if(!question||questions.has(question.toLowerCase())||typeof g.required!=='boolean'||!Array.isArray(g.options)||!g.options.length||g.options.length>12)return null;
+   const options:string[]=[],seen=new Set<string>();
+   for(const value of g.options){const label=clean(value,100);if(!label||seen.has(label.toLowerCase()))return null;seen.add(label.toLowerCase());options.push(label);}
+   questions.add(question.toLowerCase());result.push({question,required:g.required,options});
+ }
+ return result;
+}

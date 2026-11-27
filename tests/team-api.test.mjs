@@ -194,6 +194,12 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await dining(other,'availability')).status,403);
     await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false});
     assert.equal((await dining(owner,'extract',{text:'Burger $22'})).status,503);
+    const suggestionItem={name:'Wild Mushroom Pasta',category:'Entrees',description:'Creamy mushroom pasta'};
+    assert.equal((await dining(other,'suggest-modifiers',suggestionItem)).status,403);
+    assert.equal((await dining(owner,'suggest-modifiers',{...suggestionItem,name:''})).status,400);
+    assert.equal((await dining(owner,'suggest-modifiers',suggestionItem)).status,503);
+    assert.equal((await dining(owner,'menu')).data.menu.items[0].name,'Burger');
+
     assert.equal((await dining(owner,'availability',{itemId:'burger',soldOut:true,version:2})).status,200);
     assert.equal((await dining(owner,'availability')).data.items[0].soldOut,true);
     assert.equal((await guestDining(outageGuest,cart)).status,409);
