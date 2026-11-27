@@ -67,6 +67,23 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
       assert.equal(response.status,503);
       assert.equal((await response.json()).error,'AI translation is temporarily unavailable.');
     }
+    // Real guest endpoint must serve trusted exact FAQs with provider disabled.
+    const outageGuest=await account('outageguest');
+    const outageHotel=db.collection('hotels').doc(owner.uid);
+    const outageSession=outageHotel.collection('sessions').doc('outage-session');
+    await outageHotel.update({faqs:[{question:'How much is parking?',answer:'$15 plus tax'}]});
+    await outageSession.set({guestUid:outageGuest.uid,status:'active',guestAccessStartedAt:Timestamp.now()});
+    async function outageTurn(id,message){
+      await outageSession.collection('messages').doc(id).set({sender:'guest',guestUid:outageGuest.uid,text:message,timestamp:Timestamp.now()});
+      const response=await fetch(base+'/api/gemini/concierge',{method:'POST',headers:{Authorization:'Bearer '+outageGuest.token,'Content-Type':'application/json'},body:JSON.stringify({hotelId:owner.uid,sessionId:'outage-session',guestMessageId:id,hotelName:'Test hotel',persona:'',transcript:'Guest: '+message,latestGuestMessage:message,faqs:[{question:'How much is parking?',answer:'Free'}]})});
+      return {status:response.status,data:await response.json()};
+    }
+    const faq=await outageTurn('faq','How much is parking?');
+    assert.equal(faq.status,200);assert.equal(faq.data.text,'$15 plus tax');
+    const failed=await outageTurn('unknown','Can you recommend a restaurant nearby?');
+    assert.equal(failed.status,503);
+    // Clean up assistance events to avoid affecting later aggregate assertions.
+    for(const id of ['faq','unknown'])await outageHotel.collection('assistanceEvents').doc(createHash('sha256').update('outage-session|'+id).digest('hex')).delete();
     assert.equal((await policyCall(dev,'model-policy',initial.data.policy)).status,200);
     const payload={hotelId:owner.uid,email:agent.email,role:'associate',department:'Front Desk'};
     assert.equal((await call(other,'invitations',payload)).status,403);
