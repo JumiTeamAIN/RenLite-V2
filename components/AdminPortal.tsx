@@ -565,9 +565,18 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
 
   const handleRequestTransition = async (
     req: Request,
-    nextStatus: 'acknowledged' | 'in_progress' | 'completed' | 'escalated'
+    nextStatus: 'acknowledged' | 'in_progress' | 'completed' | 'escalated' | 'cancelled'
   ) => {
     const path = `hotels/${hotelId}/requests/${req.id}`;
+    if(req.diningOrder){
+      try{
+        if(nextStatus==='cancelled'&&!window.confirm('Cancel this dining request? If already entered into POS, void it there separately.'))return;
+        const user=auth.currentUser;if(!user)throw Error('Sign in again.');
+        const r=await fetch('/api/dining/staff-transition',{method:'POST',headers:{Authorization:'Bearer '+await user.getIdToken(),'Content-Type':'application/json'},body:JSON.stringify({hotelId,requestId:req.id,nextStatus})});
+        const data=await r.json();if(!r.ok)throw Error(data.error||'Could not update order.');
+      }catch(e){window.alert(e instanceof Error?e.message:'Order action could not be confirmed.');}
+      return;
+    }
     try {
       await updateDoc(doc(db, path), {
         status: nextStatus,
@@ -1357,9 +1366,7 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                             {req.item || req.category}
                           </div>
 
-                          {req.description && (
-                            <div className="text-xs text-slate-600">{req.description}</div>
-                          )}
+                          {req.diningOrder?<div className="space-y-1 text-sm text-slate-700"><p className="font-semibold">{req.status==='pending'?'Awaiting acknowledgment':req.status==='acknowledged'?'Awaiting POS entry':req.status==='in_progress'?'Entered into POS':req.status==='completed'?'Completed':'Cancelled'}</p><p>{req.diningOrder.guestCount} guests · {req.diningOrder.currency} {(req.diningOrder.subtotalCents/100).toFixed(2)} subtotal</p>{req.diningOrder.lines.map((l,i)=><div key={i}>{l.quantity} × {l.name}{l.choices.map((c,j)=><p key={j} className="pl-3 text-xs">{c.question}: {c.answer}</p>)}</div>)}<p className="text-xs">Enter manually into POS. Confirm final charges and delivery with guest.</p></div>:req.description && <div className="text-xs text-slate-600">{req.description}</div>}
 
                           {req.originalMessage && req.originalMessage !== req.description && (
                             <div className="text-xs text-slate-500">
@@ -1381,7 +1388,8 @@ export const AdminPortal: React.FC<AdminPortalProps> = ({ hotelId }) => {
                           </div>
                         </div>
 
-                        {req.status !== 'completed' && req.status !== 'cancelled' && (
+                        {req.diningOrder&&req.status!=='completed'&&req.status!=='cancelled'&&<div className="flex flex-wrap gap-2">{req.status==='pending'&&<button onClick={()=>handleRequestTransition(req,'acknowledged')} className="border rounded px-3 py-2 text-xs">Acknowledge Order</button>}{req.status==='acknowledged'&&<button onClick={()=>handleRequestTransition(req,'in_progress')} className="bg-indigo-600 text-white rounded px-3 py-2 text-xs">Confirm Entered into POS</button>}{req.status==='in_progress'&&<button onClick={()=>handleRequestTransition(req,'completed')} className="bg-emerald-600 text-white rounded px-3 py-2 text-xs">Mark Delivered / Complete</button>}<button onClick={()=>handleRequestTransition(req,'cancelled')} className="border rounded px-3 py-2 text-xs text-red-700">Cancel order</button></div>}
+                        {!req.diningOrder && req.status !== 'completed' && req.status !== 'cancelled' && (
                           <div className="flex flex-wrap items-center gap-2 shrink-0">
                             {req.status === 'pending' && (
                               <button
