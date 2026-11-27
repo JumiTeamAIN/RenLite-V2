@@ -1,10 +1,11 @@
 import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
-import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,type ModifierChoice,type CartLine} from '../services/diningOrder';
+import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
-export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
-export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void}>(({hotelId,sessionId,visible,onSubmitted},ref)=>{
+export type ChatCartSnapshot={count:number;guestCount:number;room:string;currency:string;subtotal:number;lines:{name:string;quantity:number;choices:string[];total:number}[];review:ReturnType<typeof reviewCart>|null;quoteId:string;receipt:string;uncertain:boolean;busy:boolean;error:string};
+export type GuestDiningHandle={chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
+export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void;onCartSnapshot?:(snapshot:ChatCartSnapshot)=>void}>(({hotelId,sessionId,visible,onSubmitted,onCartSnapshot},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
  const [quoteId,setQuoteId]=useState(''),[receipt,setReceipt]=useState(''),[uncertain,setUncertain]=useState(false);
@@ -17,6 +18,7 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
  useEffect(()=>{if(visible)scrollRef.current?.scrollTo({top:0});},[cartOpen,category,visible]);
  const count=lines.reduce((n,l)=>n+l.quantity,0);
  const subtotal=lines.reduce((n,l)=>{const item=menu.items.find(x=>x.id===l.itemId);return n+(item?estimatedUnitCents(item,l)*l.quantity:0);},0);
+ useEffect(()=>{onCartSnapshot?.({count,guestCount,room,currency:menu.currency,subtotal,lines:lines.map(l=>{const item=menu.items.find(x=>x.id===l.itemId);return {name:item?.name||'Unavailable item',quantity:l.quantity,choices:item?modifierGroups(item).flatMap(g=>selectedOptions(l.choices[g.id]).length?[g.question+': '+selectedOptions(l.choices[g.id]).join(', ')]:[]):[],total:item?estimatedUnitCents(item,l)*l.quantity:0};}),review,quoteId,receipt,uncertain,busy,error});},[onCartSnapshot,count,guestCount,room,menu,subtotal,lines,review,quoteId,receipt,uncertain,busy,error]);
  const hasUnavailable=lines.some(l=>!menu.items.some(x=>x.id===l.itemId&&orderable(x)));
  const categories=[...new Set(menu.items.map(x=>x.category))];
  const money=(n:number)=>menu.currency+' '+(n/100).toFixed(2);
@@ -75,16 +77,38 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
      return item.name;
    }finally{chatAdding.current=false;if(g===generation.current)setBusy(false);}
  }
- React.useImperativeHandle(ref,()=>({addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
+ async function chatCommand(command:CartCommand):Promise<string>{
+   if(busy||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
+   if(command.kind==='show')return lines.length?'Here are your current selections. Nothing has been submitted.':'Your dining cart is empty.';
+   if(command.kind==='retry'){if(!uncertain||!quoteId)throw Error('There is no pending confirmation to retry.');return confirm();}
+   if(uncertain)throw Error('Please retry the same confirmation or contact Front Desk before changing your order.');
+   if(command.kind==='confirm'){if(!review||'error' in review||!quoteId)throw Error('Review your order and confirm the displayed subtotal first.');return confirm();}
+   if(command.kind==='guests'){
+     if(!Number.isInteger(command.count)||command.count<1||command.count>20)throw Error('Choose a dining party of 1–20.');
+     setGuestCount(command.count);setReview(null);setQuoteId('');return 'Dining party updated to '+command.count+'.';
+   }
+   if(!lines.length)throw Error('Your dining cart is empty. Add a menu item first.');
+   if(command.kind==='review'){
+     if(!guestCount)return 'How many guests are dining? Enter a number of guests below or say “2 guests”.';
+     return preview();
+   }
+   if(command.kind==='quantity'||command.kind==='remove'||command.kind==='choice'){
+     const next=resolveCartEdit(menu,lines,command);
+     if('error' in next)throw Error(next.error);
+     change(next);return 'Your cart has been updated. Review the new subtotal before ordering.';
+   }
+   return 'Review your cart.';
+ }
+ React.useImperativeHandle(ref,()=>({chatCommand,addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
  async function preview(){
-   if(uncertain||submitting.current)return;
-   const g=generation.current;setBusy(true);setError('');setReview(null);
-   try{const r=await api({lines,guestCount});if(g===generation.current){setReview(r.review);setQuoteId(r.quoteId);setRoom(r.roomNumber);}}
-   catch(e){if(g===generation.current)setError(e instanceof Error?e.message:'Unable to review.');}
+   if(uncertain||submitting.current)return 'Please resolve the pending confirmation first.';
+   const g=generation.current;setBusy(true);setError('');setReview(null);setQuoteId('');
+   try{const r=await api({lines,guestCount});if(g===generation.current){setReview(r.review);setQuoteId(r.quoteId);setRoom(r.roomNumber);return 'Please review the order below. Confirm only if everything is correct.';}return 'Dining session changed.';}
+   catch(e){const message=e instanceof Error?e.message:'Unable to review.';if(g===generation.current)setError(message);return message;}
    finally{if(g===generation.current)setBusy(false);}
  }
  async function confirm(){
-   if(!quoteId||submitting.current||(!review&&!uncertain))return;
+   if(!quoteId||submitting.current||(!review&&!uncertain))return 'Review your order before confirming.';
    submitting.current=true;setBusy(true);setError('');
    try{sessionStorage.setItem(pendingKey,quoteId);}catch{}
    setUncertain(true);
@@ -97,8 +121,8 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
        throw Error(r.status===403?'Unable to verify order status. Contact the Front Desk before placing another order. Reference: D-'+quoteId.slice(0,12).toUpperCase():data.error||'Order submission could not be confirmed.');
      }
      if(!data.referenceCode)throw Error('Order confirmation unavailable.');
-     setReceipt(data.referenceCode);setLines([]);setConfiguring(null);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');onSubmitted?.();try{sessionStorage.removeItem(pendingKey);}catch{}
-   }catch(e){setError(e instanceof Error?e.message:'Submission could not be confirmed. Retry the same confirmation.');}
+     setReceipt(data.referenceCode);setLines([]);setConfiguring(null);setReview(null);setQuoteId('');setUncertain(false);setNotice('Order submitted to Front Desk.');onSubmitted?.();try{sessionStorage.removeItem(pendingKey);}catch{}return 'Order #'+data.referenceCode+' submitted to Front Desk for processing. Staff will confirm final charges and delivery.';
+   }catch(e){const message=e instanceof Error?e.message:'Submission could not be confirmed. Retry the same confirmation.';setError(message);return message;}
    finally{submitting.current=false;setBusy(false);}
  }
  return <section className={visible?"flex-1 min-h-0 flex flex-col":"hidden"}><div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">

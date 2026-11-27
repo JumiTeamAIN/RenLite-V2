@@ -111,3 +111,45 @@ export function diningProposalReply(menu:DiningMenu,proposals:DiningProposal[]){
  });
  return 'Certainly! Here are the selections I understood: '+parts.join('; ')+'. Review each selection below and complete any remaining preparation choices. Nothing has been added or submitted yet.';
 }
+
+
+// Narrow, explicit guest cart commands. No model is allowed to confirm a quote.
+export type CartCommand={kind:'show'|'review'|'confirm'|'retry'}|{kind:'guests';count:number}|{kind:'remove';target:string}|{kind:'quantity';target:string;quantity:number}|{kind:'choice';target:string;option:string};
+export function parseCartCommand(text:string):CartCommand|null{
+ const t=text.toLowerCase().trim().replace(/[’]/g,"'").replace(/[.!?]+$/,'').trim();
+ if(/^(?:show (?:me )?(?:my|the) (?:cart|order)|what(?:'s| is) in my cart|what have i ordered so far|how much is everything|(?:my|the) subtotal|view cart)$/.test(t))return {kind:'show'};
+ if(/^(?:review (?:my|the) order|checkout|check out my order|that's everything|that's all|ready to order|place my order)$/.test(t))return {kind:'review'};
+ if(/^(?:confirm (?:and place |my |the )?order|yes,? place (?:my|the) order|yes,? submit (?:my|the) order)$/.test(t))return {kind:'confirm'};
+ if(t==='retry same confirmation')return {kind:'retry'};
+ const n=(s:string)=>({one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10}[s]??Number(s));
+ let m=t.match(/^(?:we are |there are |for )?(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten) (?:guests|people|diners)$/);
+ if(m)return {kind:'guests',count:n(m[1])};
+ m=t.match(/^remove (?:the |my )?(.+?)(?: from (?:my|the) cart)?$/);
+ if(m)return {kind:'remove',target:m[1]};
+ m=t.match(/^(?:actually,? )?(?:make (?:that|it) |change (?:the )?quantity to )(\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)(?: (.+))?$/);
+ if(m)return {kind:'quantity',target:m[2]||'',quantity:n(m[1])};
+ m=t.match(/^change (?:the |my )?(.+?) to (\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten)$/);
+ if(m)return {kind:'quantity',target:m[1],quantity:n(m[2])};
+ m=t.match(/^change (?:the |my )?(.+?) to (.+)$/);
+ if(m)return {kind:'choice',target:m[1],option:m[2]};
+ m=t.match(/^actually,? (?:make (?:it|that) )?(.+)$/);
+ if(m)return {kind:'choice',target:'',option:m[1]};
+ return null;
+}
+export function resolveCartEdit(menu:DiningMenu,lines:CartLine[],command:Extract<CartCommand,{kind:'remove'|'quantity'|'choice'}>):CartLine[]|{error:string}{
+ const norm=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const words=(s:string)=>norm(s).split(' ').map(w=>w.length>3&&w.endsWith('s')?w.slice(0,-1):w);
+ const target=words(command.target);
+ const candidates=lines.map((line,index)=>({line,index,item:menu.items.find(x=>x.id===line.itemId)})).filter(x=>x.item&&(!command.target||target.every(w=>words(x.item!.name).includes(w))));
+ if(candidates.length!==1)return {error:candidates.length?'More than one cart selection matches. Use the cart controls to choose which one.':'I could not find that item in your cart.'};
+ const {line,index,item}=candidates[0];
+ if(command.kind==='remove')return lines.filter((_,i)=>i!==index);
+ if(command.kind==='quantity'){
+   if(!Number.isInteger(command.quantity)||command.quantity<1||command.quantity>20)return {error:'Choose a quantity between 1 and 20.'};
+   return lines.map((l,i)=>i===index?{...l,quantity:command.quantity}:l);
+ }
+ const matches=modifierGroups(item!).flatMap(g=>g.options.filter(o=>norm(o)===norm(command.option)).map(o=>({g,o})));
+ if(matches.length!==1||matches[0].g.maxSelections!==1)return {error:'Please use the cart controls to select the approved preparation option.'};
+ const {g,o}=matches[0];
+ return lines.map((l,i)=>i===index?{...l,choices:{...line.choices,[g.id]:o}}:l);
+}
