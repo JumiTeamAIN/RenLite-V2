@@ -99,7 +99,7 @@ test('staff-moved room cannot be overwritten and stale guest delivery is rejecte
 test('guest outage handoff and fallback notice can commit together; staff sees unread conversation',async()=>{
  const guest=db('guestA',{firebase:{sign_in_provider:'anonymous'}});
  const session=doc(guest,'hotels','ownerA','sessions','session1');
- const reply=doc(guest,'hotels','ownerA','sessions','session1','ai-outage');
+ const reply=doc(guest,'hotels','ownerA','sessions','session1','messages','ai-outage');
  await assertSucceeds(runTransaction(guest,async tx=>{
    await tx.get(session);await tx.get(reply);
    tx.update(session,{status:'awaiting_human',isUnread:true,previewText:'Need assistance',previewStaffText:'Need assistance',lastUpdatedAt:serverTimestamp()});
@@ -107,5 +107,5 @@ test('guest outage handoff and fallback notice can commit together; staff sees u
  }));
  const staff=db('agent');const snap=await getDoc(doc(staff,'hotels','ownerA','sessions','session1'));
  if(snap.data().status!=='awaiting_human'||!snap.data().isUnread)throw Error('Missing handoff');
- await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','sessions','session1','ai-outage')));
+ await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','sessions','session1','messages','ai-outage')));
 });
