@@ -1,10 +1,11 @@
 import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
-import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,simpleDiningProposal,cartPreparationReply,diningTargetMatches,missingDiningTarget,diningFollowup,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
+import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,simpleDiningProposal,cartPreparationReply,diningTargetMatches,missingDiningTarget,diningFollowup,applyDiningActions,type DiningActionResult,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
 export type ChatCartSnapshot={count:number;guestCount:number;room:string;currency:string;subtotal:number;lines:{name:string;quantity:number;choices:string[];total:number}[];review:ReturnType<typeof reviewCart>|null;quoteId:string;receipt:string;uncertain:boolean;busy:boolean;error:string};
-export type GuestDiningHandle={nextChatOffer:()=>string;tryMissingItem:(text:string)=>Promise<string>;dismissMissingItem:()=>string;tryExplicitAdd:(text:string,allowBare?:boolean)=>Promise<string|null>;tryPreparationEdit:(text:string)=>Promise<string|null>;chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
+export type ChatActionOutcome={route:'other'|'unavailable'}|{route:'dining';result:DiningActionResult;pendingItem:ChatDiningItem|null};
+export type GuestDiningHandle={planChatActions:(messageId:string,pending:CartLine|null,context:string)=>Promise<ChatActionOutcome>;nextChatOffer:()=>string;tryMissingItem:(text:string)=>Promise<string>;dismissMissingItem:()=>string;tryExplicitAdd:(text:string,allowBare?:boolean)=>Promise<string|null>;tryPreparationEdit:(text:string)=>Promise<string|null>;chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
 export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void;onCartSnapshot?:(snapshot:ChatCartSnapshot)=>void}>(({hotelId,sessionId,visible,onSubmitted,onCartSnapshot},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
@@ -142,7 +143,30 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
    if(!command)return null;
    return chatCommand(command);
  }
- React.useImperativeHandle(ref,()=>({nextChatOffer,tryMissingItem,dismissMissingItem,tryExplicitAdd,tryPreparationEdit,chatCommand,addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
+ async function planChatActions(messageId:string,pending:CartLine|null,context:string):Promise<ChatActionOutcome>{
+   if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
+   const g=generation.current,state={lines,guestCount,pending};
+   // Any unresolved conversational request can invalidate the guest's earlier review.
+   setReview(null);setQuoteId('');chatAdding.current=true;setBusy(true);
+   try{
+     const user=auth.currentUser;if(!user)throw Error('Sign in again.');
+     const response=await fetch('/api/dining/plan/'+encodeURIComponent(hotelId),{method:'POST',headers:{Authorization:'Bearer '+await user.getIdToken(),'Content-Type':'application/json'},body:JSON.stringify({sessionId,guestMessageId:messageId,state,context}),signal:AbortSignal.timeout(35000)});
+     const plan=await response.json().catch(()=>({}));
+     if(g!==generation.current)throw Error('Dining session changed.');
+     if(!response.ok)throw Error(plan.error||'Could not interpret that dining request.');
+     if(plan.route==='other')return {route:'other'};
+     if(plan.route!=='dining')return {route:'unavailable'};
+     const fresh=await api({});
+     if(g!==generation.current||JSON.stringify(offerState.current.lines)!==JSON.stringify(state.lines))throw Error('Your cart changed. Please try again.');
+     const result=applyDiningActions(fresh.menu,state,plan.actions);
+     if(!result)return {route:'unavailable'};
+     const item=result.pending?fresh.menu.items.find((x:MenuItem)=>x.id===result.pending!.itemId):undefined;
+     const pendingItem=item?{name:item.name,id:item.id,groups:modifierGroups(item),currency:fresh.menu.currency}:null;
+     if(result.changed){setMenu(fresh.menu);setReady(true);setRoom(fresh.roomNumber);change(result.lines);offerState.current.menu=fresh.menu;setGuestCount(result.guestCount);setCartOpen(true);if(missing.current&&diningTargetMatches(fresh.menu,missing.current).some(x=>result.lines.some(l=>l.itemId===x.id)))missing.current='';}
+     return {route:'dining',result,pendingItem};
+   }finally{chatAdding.current=false;if(g===generation.current)setBusy(false);}
+ }
+ React.useImperativeHandle(ref,()=>({planChatActions,nextChatOffer,tryMissingItem,dismissMissingItem,tryExplicitAdd,tryPreparationEdit,chatCommand,addFromChat:(id)=>addChatItem(id),getChatItem,addCustomizedFromChat:(item,choices,quantity)=>addChatItem(item.id,choices,item,quantity)}));
  async function preview(){
    if(uncertain||submitting.current)return 'Please resolve the pending confirmation first.';
    if(missing.current){setError('Resolve the missing item before reviewing the order. Return to Chat.');return 'Please resolve the missing item before reviewing the order.';}

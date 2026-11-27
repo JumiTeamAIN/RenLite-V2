@@ -471,7 +471,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         }
         return;
       }
-      const cartCommand=parseCartCommand(text);
+      const cartCommand=/\b(?:and (?:add|remove|change|make|give|bring|also)|then (?:add|remove|change|make)|also (?:add|remove|change))\b/i.test(text)?null:parseCartCommand(text);
       if(!isStaffControlled&&!wasCompleted&&cartCommand&&(chatCartOpen||cartSnapshot?.count||cartSnapshot?.uncertain||cartCommand.kind==='show'||cartCommand.kind==='review'||cartCommand.kind==='confirm')){
         await runCartCommand(cartCommand);return;
       }
@@ -495,12 +495,47 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
         try{
           const message=await diningRef.current.tryExplicitAdd(text,offerActive.current&&!customizing);
           if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message+(customizing?'':nextOffer()));setChatCartOpen(true);}return;}
-          if(customizing&&(explicitAddTarget(text)||additionalDiningTarget(text))){setDiningChatNotice('Please finish the current preparation selection first, then add the next item. Nothing else has been added.');return;}
+          // More complex additions proceed to the structured planner without losing the pending item.
         }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add that item. Nothing was confirmed.');return;}
       }
       if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&diningRef.current){
         try{const message=await diningRef.current.tryPreparationEdit(text);if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message);setChatCartOpen(true);}return;}}
         catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not update your selection.');return;}
+      }
+      // Interpret unresolved dining turns against actual cart and pending preparation, not just transcript.
+      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&(customizing||cartSnapshot?.count||offerActive.current)&&!diningSuggestion.length){
+        try{
+          const pending=customizing?{itemId:customizing.item.id,quantity:customizing.quantity,choices:customizing.choices}:null;
+          const context=messages.slice(-10).map(m=>m.sender+': '+m.text).join('\n').slice(-3500);
+          const outcome=await diningRef.current.planChatActions(msgRef.id,pending,context);
+          if(diningScopeRef.current!==diningScope)return;
+          if(outcome.route==='dining'){
+            const r=outcome.result;
+            setChatCartOpen(true);
+            if(r.pending&&outcome.pendingItem){
+              const p=r.pending,item=outcome.pendingItem;
+              const step=item.groups.findIndex(g=>!validGroupChoice(g,p.choices[g.id]));
+              if(step>=0)setCustomizing({item,scope:diningScope,choices:p.choices,step,quantity:p.quantity});
+            }else setCustomizing(null);
+            let reply=[...r.messages,r.clarification].filter(Boolean).join(' ');
+            if(r.reviewRequested){
+              offerActive.current=false;
+              if(r.pending)reply+=' Please finish the pending preparation choice before reviewing.';
+              else if(r.changed)reply+=' Your selections changed. Please say “review my order” to obtain an updated review.';
+              else if(!customizing){await runCartCommand({kind:'review'});return;}
+            }else if(!r.pending&&(r.declined||r.messages.some(m=>m.includes('added to your cart')))){
+              const followup=nextOffer();
+              if(r.declined&&followup.includes('anything else')){offerActive.current=false;reply+=' Tell me when you are ready to review your order.';}
+              else reply+=followup;
+            }
+            setDiningChatNotice(reply.trim()||'Please check your current selections.');
+            return;
+          }
+          if(outcome.route==='unavailable'){
+            setDiningChatNotice('I could not verify a dining action for that message. Your cart has not changed. Please try a simpler request, use Dining, or Speak with Staff.');
+            return;
+          }
+        }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not verify that dining action.');return;}
       }
       if (!isStaffControlled) {
         setDiningSuggestion([]);

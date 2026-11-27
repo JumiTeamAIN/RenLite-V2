@@ -1,4 +1,4 @@
-import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch,explicitAddTarget,additionalDiningTarget,diningTargetMatches} from './services/diningOrder.ts';
+import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch,explicitAddTarget,additionalDiningTarget,diningTargetMatches,applyDiningActions,DINING_ACTION_INSTRUCTION} from './services/diningOrder.ts';
 import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,parseModifierSuggestions,orderable} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
@@ -1024,6 +1024,39 @@ async function startServer() {
       });
       res.status(result).json(result===200?{ok:true}:{error:'Order action not permitted or status changed. Refresh before retrying.'});
     }catch{res.status(503).json({error:'Order action could not be confirmed.'});}
+  });
+
+  // Read-only planning endpoint: model actions are validated, not executed on behalf of a guest.
+  app.post('/api/dining/plan/:hotelId',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    const hotelId=req.params.hotelId,{sessionId,guestMessageId,state,context}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)||!validHotelId(guestMessageId)||!state||JSON.stringify(state).length>30000){res.status(400).json({error:'Invalid dining context.'});return;}
+    let uid:string;
+    try{const header=req.headers.authorization||'';if(!header.startsWith('Bearer '))throw Error();uid=(await adminAuth.verifyIdToken(header.slice(7),true)).uid;}catch{res.status(401).json({error:'Sign in required.'});return;}
+    if(isRateLimited(uid)){res.status(429).json({error:'Please wait before trying again.'});return;}
+    try{
+      const hotel=teamDb().collection('hotels').doc(hotelId),session=hotel.collection('sessions').doc(sessionId);
+      const [h,s,m,d]=await Promise.all([hotel.get(),session.get(),session.collection('messages').doc(guestMessageId).get(),hotel.collection('dining').doc('menu').get()]);
+      const ss=s.data(),msg=m.data(),menu=d.exists?parseDiningMenu(d.data()):EMPTY_MENU;
+      if(!h.exists||!guestAccessOpen(ss,uid)||['staff_controlled','awaiting_human','completed'].includes(ss?.status)||msg?.sender!=='guest'||msg.guestUid!==uid||typeof msg.text!=='string'){res.status(403).json({error:'Conversation unavailable.'});return;}
+      if(detectDeterministicSafetySignal(msg.text).triggered||explicitLocalDiningSearch(msg.text)||/\b(?:allerg\w*|chok\w*|emergency|manager|front desk|speak (?:to|with) staff|complaint|refund|towels?|housekeeping|repair)\b/i.test(msg.text)){res.json({route:'other'});return;}
+      if(!menu||!applyDiningActions(menu,state,[{kind:'show'}])){res.json({route:'unavailable'});return;}
+      const policy=await loadModelPolicy();
+      const candidates=policy.enabled?policyCandidates(policy,'concierge',getAiClients().betaClient):[];
+      for(const candidate of candidates.slice(0,2)){
+        try{
+          const items=menu.items.filter(orderable).map(x=>({id:x.id,name:x.name,description:x.description,category:x.category,priceCents:x.priceCents,groups:modifierGroups(x)}));
+          const response=await measuredAi(candidate.model,'dining-action-plan',hotelId,()=>candidate.client.models.generateContent({model:candidate.model,contents:[{role:'user',parts:[{text:DINING_ACTION_INSTRUCTION},{text:JSON.stringify({items,currency:menu.currency,state,context:typeof context==='string'?context.slice(-4000):'',latest:msg.text.slice(0,5000)})}]}],config:{responseMimeType:'application/json',maxOutputTokens:4096,...getThinkingConfigForModel(candidate.model),abortSignal:AbortSignal.timeout(12000)}}));
+          const raw=JSON.parse((response.text||'null').trim().replace(/^\x60\x60\x60(?:json)?\s*/i,'').replace(/\s*\x60\x60\x60$/,''));
+          if(raw?.route==='other'&&Array.isArray(raw.actions)&&!raw.actions.length){res.json({route:'other'});return;}
+          if(raw?.route!=='dining'||!applyDiningActions(menu,state,raw.actions))continue;
+          const current=await session.get();
+          if(!guestAccessOpen(current.data(),uid)||['staff_controlled','awaiting_human','completed'].includes(current.data()?.status)){res.status(409).json({error:'Conversation changed.'});return;}
+          res.json({route:'dining',actions:raw.actions});return;
+        }catch(e){console.warn('[dining-action-plan]',{status:getHttpStatusFromError(e),budgetBlocked:Boolean((e as any)?.localBudget)});if((e as any)?.localBudget)break;}
+      }
+      res.json({route:'unavailable'});
+    }catch{res.json({route:'unavailable'});}
   });
 
   app.post('/api/gemini/concierge', async (req, res) => {
