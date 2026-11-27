@@ -1181,11 +1181,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
                             : 'text-indigo-700'
                       }`}
                     >
-                      {statusLabel}
+                      {req.diningOrder?({pending:'Submitted to hotel',acknowledged:'Staff acknowledged',in_progress:'Entered into POS',completed:'Completed',cancelled:'Cancelled'} as Record<string,string>)[req.status]||statusLabel:statusLabel}
                     </span>
                   </div>
 
-                  {req.status === 'completed' && (
+                  {req.status === 'completed' && !req.diningOrder && (
                     <div className="pt-2 border-t border-slate-100 flex justify-end">
                       <button
                         type="button"
