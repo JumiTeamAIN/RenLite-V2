@@ -74,8 +74,9 @@ export function diningReply(menu:DiningMenu,text:string){
 // An explicit simple order is usable even when the provider is unavailable.
 export function simpleDiningProposal(menu:DiningMenu,text:string):DiningProposal|null{
  if(!menu.enabled)return null;
- const normalized=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!]+$/,'');
- const m=normalized.match(/^(?:i would like to order|i would like|i'd like to order|i'd like|i want to order|i want|i'll take|i'll have|can i have|please bring)\s+(?:(a|an|one|two|three|four|five|\d{1,2})\s+)?(.+?)(?:\s+please)?$/);
+ const normalized=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'');
+ const addition=explicitAddTarget(text);
+ const m=(addition?'i want '+addition:normalized).match(/^(?:i would like to order|i would like|i'd like to order|i'd like|i want to order|i want|i'll take|i'll have|can i have|please bring)\s+(?:(a|an|one|two|three|four|five|\d{1,2})\s+)?(.+?)(?:\s+please)?$/);
  if(!m)return null;
  const target=m[2];
  if(/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove)\b/.test(target))return null;
@@ -125,6 +126,7 @@ export function contextualDiningIntent(text:string,transcript:string,items:MenuI
  const t=text.toLowerCase().replace(/’/g,"'").trim();
  if(explicitLocalDiningSearch(text))return false;
  if(/\b(?:help|emergency|allerg(?:y|ic|ies|en)|chok(?:e|ing)|manager|staff|front desk|complaint|refund|towel|housekeeping|clean|repair|broken|not working|cancel|remove|change|replace|instead|no longer|don't|do not|without)\b/i.test(t))return false;
+ if(explicitAddTarget(text))return true;
  if(diningIntent(text,items)==='dining')return true;
  const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
  const exact=items.some(x=>orderable(x)&&(' '+normalize(text)+' ').includes(' '+normalize(x.name)+' '));
@@ -184,4 +186,48 @@ export function resolveCartEdit(menu:DiningMenu,lines:CartLine[],command:Extract
  if(matches.length!==1||matches[0].g.maxSelections!==1)return {error:'Please use the cart controls to select the approved preparation option.'};
  const {g,o}=matches[0];
  return lines.map((l,i)=>i===index?{...l,choices:{...line.choices,[g.id]:o}}:l);
+}
+
+// An explicit request to add an item is a cart instruction, not a question about the menu.
+export function explicitAddTarget(text:string):string|null{
+ const t=text.toLowerCase().replace(/’/g,"'").trim().replace(/[.!?]+$/,'').trim();
+ const m=t.match(/^(?:(?:may|can|could|would) (?:i|you) |please )?add (.+?)(?: to (?:that|it|my (?:order|cart)|the (?:order|cart)))?(?:,? please)?$/);
+ if(!m||!m[1]||/\b(?:and|or|with|without|not|no|except|instead|allergy|allergic|cancel|remove|towels?|pillows?|blankets?|linens?|toiletries|housekeeping|staff|manager|help|nearby)\b/.test(m[1]))return null;
+ return m[1];
+}
+const preferenceNorm=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+export function preparationReply(itemName:string,group:ReturnType<typeof modifierGroups>[number],text:string):ModifierChoice|undefined{
+ let t=preferenceNorm(text).replace(/\s+please$/,'').trim();
+ const name=preferenceNorm(itemName);
+ // Allow a complete item name or its unambiguous suffix before an exact option.
+ for(const option of group.options){
+   const o=preferenceNorm(option);
+   if(group.maxSelections===1&&t===o)return option;
+   if(group.maxSelections===1&&t.endsWith(' '+o)){
+     const prefix=t.slice(0,-o.length).trim().replace(/^(?:the|my)\s+/,'');
+     if(prefix&&(name===prefix||name.endsWith(' '+prefix)))return option;
+   }
+ }
+ const parts=text.toLowerCase().trim().replace(/[.!?]+$/,'').replace(/,?\s+please$/,'').split(/\s*,\s*|\s+and\s+/);
+ if(group.maxSelections>1){
+   const matches=parts.map(p=>group.options.find(o=>preferenceNorm(o)===preferenceNorm(p)));
+   if(matches.every(Boolean)&&validGroupChoice(group,matches))return matches as string[];
+ }
+ if(!group.required&&/^(?:no|no thanks|no thank you|none|skip)$/.test(t))return '';
+ return undefined;
+}
+// Update an existing selection only when exactly one line/group/option matches.
+export function cartPreparationReply(menu:DiningMenu,lines:CartLine[],text:string):CartCommand|null{
+ const t=preferenceNorm(text).replace(/\s+please$/,'').trim();
+ const hits:{target:string;option:string}[]=[];
+ for(const line of lines){
+   const item=menu.items.find(x=>x.id===line.itemId&&orderable(x));if(!item)continue;
+   for(const group of modifierGroups(item)){
+     if(group.maxSelections!==1)continue;
+     const option=preparationReply(item.name,group,text);
+     // A bare option can be an answer to another question; require an item name here.
+     if(typeof option==='string'&&option&&t!==preferenceNorm(option))hits.push({target:item.name,option});
+   }
+ }
+ return hits.length===1?{kind:'choice',...hits[0]}:null;
 }
