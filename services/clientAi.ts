@@ -30,7 +30,10 @@ interface ServerConciergeRequest {
   priority: 'normal' | 'high' | 'urgent';
 }
 
+export type DiningSuggestion = {itemId:string;name:string};
+
 interface ServerConciergeResponse {
+  diningSuggestion?: DiningSuggestion;
   text?: string;
   replyEnglish?: string;
   latestGuestEnglish?: string;
@@ -489,7 +492,7 @@ export const sendMessageToAI = async (
     // 8. Persist AI Response AFTER requests succeed/fail cleanly
     const replyRef = doc(collection(db, msgsPath), `ai-${targetGuestMsgId}`);
     const sessionRef = doc(db, sessionPath);
-    await runTransaction(db, async (tx) => {
+    const replySaved = await runTransaction(db, async (tx) => {
       const current = await tx.get(sessionRef);
       const existingReply = await tx.get(replyRef);
       if (!current.exists() || existingReply.exists() || ['staff_controlled', 'completed','awaiting_human'].includes(current.data().status)) return;
@@ -533,7 +536,9 @@ export const sendMessageToAI = async (
           }
         : {}),
     });
+    return true;
     });
+    if(replySaved&&data.diningSuggestion&&typeof data.diningSuggestion.itemId==='string'&&typeof data.diningSuggestion.name==='string')return data.diningSuggestion;
   } catch (error) {
     console.error('Ren AI Error:', error);
     // Do not post an outage message into a staff-controlled or closed chat.
