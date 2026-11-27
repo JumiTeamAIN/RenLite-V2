@@ -128,11 +128,29 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,200);
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,409);
     assert.equal((await dining(owner,'menu')).data.menu.items[0].priceCents,2200);
+    const guestMenu={...sampleMenu,enabled:true,items:[{...sampleMenu.items[0],modifiers:['Cooking temperature | Medium | Well done']}]};
+    assert.equal((await dining(owner,'menu',{menu:guestMenu,version:1})).status,200);
+    async function guestDining(account,body={}){
+      const response=await fetch(base+'/api/dining/guest/'+owner.uid,{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({sessionId:'outage-session',...body})});
+      return {status:response.status,data:await response.json()};
+    }
+    assert.equal((await guestDining(other)).status,403);
+    assert.equal((await guestDining(outageGuest)).data.menu.items[0].name,'Burger');
+    const cart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium'}}]};
+    assert.equal((await guestDining(outageGuest,cart)).data.review.subtotalCents,4400);
+    assert.equal((await guestDining(outageGuest,{...cart,lines:[{itemId:'burger',quantity:2,choices:{}}]})).status,409);
+    const startDining=await outageTurn('dining-intent','I would like room service.');
+    assert.equal(startDining.status,200);assert.equal(startDining.data.requests.length,0);assert.match(startDining.data.text,/No order has been placed/);
+
     assert.equal((await dining(other,'availability')).status,403);
     await policyCall(dev,'model-policy',{...initial.data.policy,enabled:false});
     assert.equal((await dining(owner,'extract',{text:'Burger $22'})).status,503);
-    assert.equal((await dining(owner,'availability',{itemId:'burger',soldOut:true,version:1})).status,200);
+    assert.equal((await dining(owner,'availability',{itemId:'burger',soldOut:true,version:2})).status,200);
     assert.equal((await dining(owner,'availability')).data.items[0].soldOut,true);
+    assert.equal((await guestDining(outageGuest,cart)).status,409);
+    const soldOutTurn=await outageTurn('dining-sold-out','I would like a burger.');
+    assert.equal(soldOutTurn.status,200);assert.equal(soldOutTurn.data.requests.length,0);assert.match(soldOutTurn.data.text,/sold out/);
+
     assert.equal((await dining(owner,'menu')).data.menu.items[0].priceCents,2200);
     await policyCall(dev,'model-policy',initial.data.policy);
     const payload={hotelId:owner.uid,email:agent.email,role:'associate',department:'Front Desk'};
@@ -147,9 +165,9 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await call(agent,'accept',{token:issued.data.token})).status,403);
     assert.equal((await call(agent,'hotels')).data.hotels[0].hotelId,owner.uid);
     assert.equal((await dining(agent,'menu')).status,403);
-    assert.equal((await dining(agent,'availability',{itemId:'burger',soldOut:false,version:2})).status,200);
+    assert.equal((await dining(agent,'availability',{itemId:'burger',soldOut:false,version:3})).status,200);
     assert.equal((await dining(agent,'availability')).data.items[0].soldOut,false);
-    assert.equal((await dining(agent,'availability',{itemId:'burger',soldOut:true,version:2})).status,409);
+    assert.equal((await dining(agent,'availability',{itemId:'burger',soldOut:true,version:3})).status,409);
     assert.equal((await db.collection('hotels').doc(owner.uid).collection('diningAvailabilityAudit').get()).size,2);
 
     assert.equal((await call(agent,'directory/'+owner.uid)).status,403);
