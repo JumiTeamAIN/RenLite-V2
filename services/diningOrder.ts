@@ -49,7 +49,7 @@ export function diningReply(menu:DiningMenu,text:string){
    const groups=modifierGroups(requested);
    const options=groups.filter(g=>g.options.length).map(g=>g.question+': '+g.options.join(' or ')).join('; ');
    const extra=menu.items.find(x=>requested.upsells.includes(x.id)&&orderable(x));
-   return 'Certainly! Our '+requested.name+' is '+price(requested)+'. '+(requested.description?requested.description+' ':'')+(options?'We offer these preparation choices: '+options+'. ':'')+(extra?'Would '+extra.name+' ('+price(extra)+') go well with your meal? ':'')+'You can add it in Dining, choose any preparation options, and confirm your order when ready. No order has been placed.';
+   return 'Certainly! Our '+requested.name+' is '+price(requested)+'. '+(requested.description?requested.description+' ':'')+(options?'We offer these preparation choices: '+options+'. ':'')+(extra?'Would '+extra.name+' ('+price(extra)+') go well with your meal? ':'')+'Use the Add to cart button below, or open Dining to customize your selections and confirm your order when ready. No order has been placed.';
  }
  const categories=[...new Set(menu.items.filter(orderable).map(x=>x.category))].slice(0,5);
  return 'Of course! I’d be happy to help with in-room dining. '+(categories.length?'We have '+categories.join(', ')+'. ':'')+'What are you in the mood for? You can also browse Dining and confirm your order there. No order has been placed.';
