@@ -1,4 +1,15 @@
 import {orderable,type DiningMenu,type MenuItem} from './diningMenu.ts';
+// Match a full item name or an unambiguous menu-name phrase; never invent menu entries.
+export function matchDiningItem(text:string,items:MenuItem[]):MenuItem|undefined{
+ const normalize=(s:string)=>s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const query=' '+normalize(text)+' ';
+ const candidates=items.filter(x=>x.available&&query.includes(' '+normalize(x.name)+' '));
+ if(candidates.length===1)return candidates[0];
+ if(candidates.length>1)return undefined;
+ const words=normalize(text).split(' ').filter(w=>w.length>=4&&!['want','would','like','order','please','have','bring','food','breakfast','lunch','dinner','room','service'].includes(w));
+ const partial=items.filter(x=>x.available&&words.some(w=>normalize(x.name).split(' ').includes(w)));
+ return partial.length===1?partial[0]:undefined;
+}
 export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguous'|'other'{
  const t=text.toLowerCase().replace(/[’]/g,"'").trim();
  if(/\b(clean|make up|service) (my|our|the) room\b|\b(my|our) room (cleaned|serviced)\b|\bhousekeeping\b/.test(t))return 'other';
@@ -7,7 +18,7 @@ export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguou
    if(/\b(hours|time|open|close|available|number|phone|cost|charge|fee)\b/.test(t)&&!/\b(order|menu|i would like|i want|i'd like)\b/.test(t))return 'other';
    return 'dining';
  }
- if(/\b(i (want|would like)|i'd like|can i (have|get|order)|please bring|order)\b/.test(t)&&items.some(x=>x.available&&x.name.length>=3&&t.includes(x.name.toLowerCase())))return 'dining';
+ if(/\b(i (want|would like)|i'd like|can i (have|get|order)|please bring|order)\b/.test(t)&&Boolean(matchDiningItem(t,items)))return 'dining';
  if(/\b(i (want|would like)|i'd like|can i (have|get|order)|please bring)\b.*\b(burger|cheeseburger|steak|pizza)\b/.test(t))return 'dining';
  return 'other';
 }
@@ -30,8 +41,16 @@ export function reviewCart(menu:DiningMenu,lines:CartLine[],guestCount:number){
  return {subtotalCents,currency:menu.currency,guestCount,lines:output};
 }
 export function diningReply(menu:DiningMenu,text:string){
- const requested=menu.items.find(x=>x.available&&text.toLowerCase().includes(x.name.toLowerCase()));
+ const requested=matchDiningItem(text,menu.items);
  if(!menu.enabled)return 'Online room service ordering is not currently available. Please contact the front desk to confirm dining options. No order has been placed.';
  if(requested?.soldOut)return 'I’m sorry, '+requested.name+' is currently sold out. Please browse Dining for available alternatives. No order has been placed.';
- return 'I can help you browse our in-room dining menu. Open Dining to select how many guests are dining, choose your items and preparation options, review your order, then select Confirm & Place Order to send it to the Front Desk. No order has been placed.';
+ const price=(item:MenuItem)=>menu.currency+' '+((item.priceCents??0)/100).toFixed(2);
+ if(requested&&orderable(requested)){
+   const groups=modifierGroups(requested);
+   const options=groups.filter(g=>g.options.length).map(g=>g.question+': '+g.options.join(' or ')).join('; ');
+   const extra=menu.items.find(x=>requested.upsells.includes(x.id)&&orderable(x));
+   return 'Certainly! Our '+requested.name+' is '+price(requested)+'. '+(requested.description?requested.description+' ':'')+(options?'We offer these preparation choices: '+options+'. ':'')+(extra?'Would '+extra.name+' ('+price(extra)+') go well with your meal? ':'')+'You can add it in Dining, choose any preparation options, and confirm your order when ready. No order has been placed.';
+ }
+ const categories=[...new Set(menu.items.filter(orderable).map(x=>x.category))].slice(0,5);
+ return 'Of course! I’d be happy to help with in-room dining. '+(categories.length?'We have '+categories.join(', ')+'. ':'')+'What are you in the mood for? You can also browse Dining and confirm your order there. No order has been placed.';
 }
