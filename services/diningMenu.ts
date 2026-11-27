@@ -1,5 +1,5 @@
 export type ModifierOption={label:string;priceCents:number};
-export type ModifierGroup={id:string;question:string;required:boolean;options:ModifierOption[]};
+export type ModifierGroup={id:string;question:string;required:boolean;minSelections?:number;maxSelections?:number;options:ModifierOption[]};
 export type MenuItem={id:string;name:string;category:string;description:string;priceCents:number|null;available:boolean;soldOut?:boolean;modifiers:string[];modifierGroups?:ModifierGroup[];upsells:string[];allergens:string};
 export type DiningMenu={currency:string;enabled:boolean;items:MenuItem[]};
 export const EMPTY_MENU:DiningMenu={currency:'USD',enabled:false,items:[]};
@@ -27,7 +27,10 @@ export function parseDiningMenu(raw:unknown):DiningMenu|null{
          if(!label||labels.has(label.toLowerCase())||!Number.isSafeInteger(o.priceCents)||o.priceCents<0||o.priceCents>1000000)return null;
          labels.add(label.toLowerCase());options.push({label,priceCents:o.priceCents});
        }
-       groupIds.add(g.id);groups.push({id:g.id,question,required:g.required,options});
+       const min=g.minSelections===undefined?(g.required?1:0):g.minSelections;
+       const max=g.maxSelections===undefined?1:g.maxSelections;
+       if(!Number.isInteger(min)||!Number.isInteger(max)||min<0||max<1||min>max||max>options.length||g.required!==(min>0))return null;
+       groupIds.add(g.id);groups.push({id:g.id,question,required:g.required,options,...(g.minSelections!==undefined||g.maxSelections!==undefined?{minSelections:min,maxSelections:max}:{})});
      }
    }
    ids.add(x.id);names.add(key);items.push({id:x.id,name,category,description,allergens,priceCents:x.priceCents,available:x.available,soldOut:x.soldOut===true,modifiers:x.modifiers.map((m:string)=>m.trim()),upsells:[...new Set<string>(x.upsells)],...(groups.length?{modifierGroups:groups}:{})});
