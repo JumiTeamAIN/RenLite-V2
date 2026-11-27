@@ -1,5 +1,5 @@
 import {GuestDining,type GuestDiningHandle,type ChatDiningItem,type ChatCartSnapshot} from './GuestDining';
-import {parseCartCommand,type CartCommand,selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
+import {parseCartCommand,explicitAddTarget,preparationReply,type CartCommand,selectedOptions,validGroupChoice,type ModifierChoice} from '../services/diningOrder';
 import React, { useState, useEffect, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import {
@@ -475,15 +475,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ hotelId, locationCode })
       }
       if (!isStaffControlled && customizing?.scope===diningScope) {
         const group=customizing.item.groups[customizing.step];
-        const normalized=text.toLowerCase().trim().replace(/[.!?]+$/,'').trim();
-        const parts=group.maxSelections>1?normalized.split(/\s*,\s*|\s+and\s+/):[normalized];
-        const matches=parts.map(p=>group.options.find(o=>o.toLowerCase().trim()===p));
-        const choice=matches.every(Boolean)?(group.maxSelections>1?matches as string[]:matches[0]):undefined;
-        const skip=!group.required&&/^(no|no thanks|no thank you|none|skip)$/.test(normalized);
-        if((choice&&validGroupChoice(group,choice))||skip){
-          await chooseDiningOption(choice||'');
+        const choice=preparationReply(customizing.item.name,group,text);
+        if(choice!==undefined&&validGroupChoice(group,choice)){
+          await chooseDiningOption(choice);
           return;
         }
+      }
+      // Explicit add commands are grounded in the fresh menu, not the generic model.
+      // Keep a pending preparation question active when the guest adds a beverage.
+      if(!isStaffControlled&&!wasCompleted&&diningRef.current&&(customizing||cartSnapshot?.count||diningSuggestion.length||chatCartOpen)&&explicitAddTarget(text)){
+        try{
+          const message=await diningRef.current.tryExplicitAdd(text);
+          if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message);setChatCartOpen(true);}return;}
+          if(customizing){setDiningChatNotice('Please finish the current preparation selection first, then add the next item. Nothing else has been added.');return;}
+        }catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not add that item. Nothing was confirmed.');return;}
+      }
+      if(!isStaffControlled&&!wasCompleted&&!customizing&&cartSnapshot?.count&&diningRef.current){
+        try{const message=await diningRef.current.tryPreparationEdit(text);if(message){if(diningScopeRef.current===diningScope){setDiningChatNotice(message);setChatCartOpen(true);}return;}}
+        catch(e){if(diningScopeRef.current===diningScope)setDiningChatNotice(e instanceof Error?e.message:'Could not update your selection.');return;}
       }
       if (!isStaffControlled) {
         setDiningSuggestion([]);
