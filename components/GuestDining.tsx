@@ -2,11 +2,13 @@ import React,{useEffect,useState,useRef} from 'react';
 import {auth} from '../services/firebase';
 import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/diningMenu';
 import {modifierGroups,reviewCart,type CartLine} from '../services/diningOrder';
-export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionId:string;visible:boolean}){
+export type GuestDiningHandle={addFromChat:(itemId:string)=>Promise<string>};
+export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean}>(({hotelId,sessionId,visible},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
  const [quoteId,setQuoteId]=useState(''),[receipt,setReceipt]=useState(''),[uncertain,setUncertain]=useState(false);
  const submitting=useRef(false);
+ const chatAdding=useRef(false);
  const pendingKey='ren_dining_pending:'+hotelId+':'+sessionId;
  useEffect(()=>{try{const saved=sessionStorage.getItem(pendingKey);if(saved){setQuoteId(saved);setUncertain(true);}}catch{}},[pendingKey]);
  const [category,setCategory]=useState(''),[cartOpen,setCartOpen]=useState(false),[notice,setNotice]=useState('');
@@ -29,10 +31,25 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
    finally{if(g===generation.current)setBusy(false);}
  }
  useEffect(()=>{return()=>{generation.current++;};},[hotelId,sessionId]);
- useEffect(()=>{if(visible&&!submitting.current)void refresh();},[visible,hotelId,sessionId]);
+ useEffect(()=>{if(visible&&!submitting.current&&!chatAdding.current)void refresh();},[visible,hotelId,sessionId]);
  const change=(next:CartLine[])=>{setLines(next);setReview(null);setQuoteId('');};
  const add=(item:MenuItem)=>{if(lines.length<30&&orderable(item)){change([...lines,{itemId:item.id,quantity:1,choices:{}}]);setNotice(item.name+' added to your cart.');}};
  const edit=(index:number,patch:Partial<CartLine>)=>change(lines.map((l,i)=>i===index?{...l,...patch}:l));
+ React.useImperativeHandle(ref,()=>({addFromChat:async(itemId:string)=>{
+   if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
+   if(lines.length>=30)throw Error('Your cart is full. Review your selections first.');
+   chatAdding.current=true;setBusy(true);const g=generation.current;
+   try{
+     const r=await api({});
+     if(g!==generation.current)throw Error('Dining session changed. Please try again.');
+     const item=(r.menu as DiningMenu).items.find(x=>x.id===itemId);
+     if(!r.menu.enabled||!item||!orderable(item))throw Error('This item is no longer available.');
+     setMenu(r.menu);setRoom(r.roomNumber);setReady(true);
+     change([...lines,{itemId:item.id,quantity:1,choices:{}}]);
+     setCartOpen(true);setNotice(item.name+' added to your cart.');
+     return item.name;
+   }finally{chatAdding.current=false;if(g===generation.current)setBusy(false);}
+ }}));
  async function preview(){
    if(uncertain||submitting.current)return;
    const g=generation.current;setBusy(true);setError('');setReview(null);
@@ -78,4 +95,4 @@ export function GuestDining({hotelId,sessionId,visible}:{hotelId:string;sessionI
  </fieldset>}
  </div>{ready&&menu.enabled&&<div className="shrink-0 border-t bg-white p-3 space-y-1"><p role="status" className="text-xs text-emerald-700 min-h-4">{notice}</p><button type="button" onClick={()=>setCartOpen(v=>!v)} className="w-full bg-indigo-600 text-white rounded-lg px-4 py-3 flex justify-between font-semibold"><span>{cartOpen?"Back to menu":"View cart"} ({count})</span><span>{hasUnavailable?"Review items":money(subtotal)}</span></button><p className="text-xs text-slate-500">{hasUnavailable?"An item is unavailable. Review your cart.":"Estimated subtotal · not submitted"}</p></div>}
  </section>;
-}
+});
