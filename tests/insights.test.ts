@@ -127,3 +127,22 @@ test('menu extraction rejects guessed invalid prices and imports disabled drafts
  assert.equal(parseDiningMenu({...EMPTY_MENU,items:[{...result.items[1],available:true}]}),null);
  assert.equal(parseDiningMenu({...EMPTY_MENU,items:[{...result.items[0],upsells:['unknown']}]}),null);
 });
+
+import {diningIntent,diningReply,reviewCart} from '../services/diningOrder.ts';
+test('dining entry is separate from housekeeping and cart review rejects unavailable or incomplete items',()=>{
+ const burger={id:'burger',name:'Angus Burger',category:'Entrees',description:'',priceCents:2200,available:true,modifiers:['Cooking temperature | Medium | Well done'],upsells:[],allergens:''};
+ const menu={currency:'USD',enabled:true,items:[burger]};
+ assert.equal(diningIntent('I would like room service.'),'dining');
+ assert.equal(diningIntent('Can you service my room?'),'other');
+ assert.equal(diningIntent('I need service in my room.'),'ambiguous');
+ assert.equal(diningIntent('What time does room service open?'),'other');
+ assert.equal(diningIntent('I would like an Angus Burger',menu.items),'dining');
+ assert.match(diningReply({...menu,enabled:false},'room service'),/No order has been placed/);
+ assert.match(diningReply({...menu,items:[{...burger,soldOut:true}]},'Angus Burger'),/sold out/);
+ const line={itemId:'burger',quantity:2,choices:{'0':'Medium'}};
+ assert.equal(reviewCart(menu,[line],2).subtotalCents,4400);
+ assert.ok('error' in reviewCart(menu,[{...line,choices:{}}],2));
+ assert.ok('error' in reviewCart(menu,[{...line,choices:{'0':'Raw'}}],2));
+ assert.ok('error' in reviewCart({...menu,items:[{...burger,soldOut:true}]},[line],2));
+ assert.ok('error' in reviewCart(menu,[line],0));
+});

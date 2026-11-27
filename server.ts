@@ -1,3 +1,4 @@
+import {diningIntent,diningReply,reviewCart} from './services/diningOrder.ts';
 import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
@@ -924,6 +925,29 @@ async function startServer() {
     }catch{res.status(503).json({error:'Could not confirm safety alert.'});}
   });
 
+  // Guest dining reads and cart previews are scoped to a live guest-owned session.
+  app.post('/api/dining/guest/:hotelId',async(req,res)=>{
+    res.set('Cache-Control','no-store');
+    const hotelId=req.params.hotelId,{sessionId,lines,guestCount}=req.body||{};
+    if(!validHotelId(hotelId)||!validHotelId(sessionId)){res.status(400).json({error:'Invalid session.'});return;}
+    let uid:string;
+    try{const header=req.headers.authorization||'';if(!header.startsWith('Bearer '))throw Error();uid=(await adminAuth.verifyIdToken(header.slice(7),true)).uid;}catch{res.status(401).json({error:'Sign in required.'});return;}
+    try{
+      const hotel=teamDb().collection('hotels').doc(hotelId);
+      const [p,session,snap]=await Promise.all([hotel.get(),hotel.collection('sessions').doc(sessionId).get(),hotel.collection('dining').doc('menu').get()]);
+      if(!p.exists||!guestAccessOpen(session.data(),uid)){res.status(403).json({error:'Conversation expired or ended.'});return;}
+      const menu=snap.exists?parseDiningMenu(snap.data()):EMPTY_MENU;
+      if(!menu){res.status(503).json({error:'Menu requires review.'});return;}
+      const publicMenu={...menu,items:menu.enabled?menu.items.filter(x=>x.available):[]};
+      if(lines!==undefined){
+        const review=reviewCart(publicMenu,lines,guestCount);
+        if('error' in review){res.status(409).json({error:review.error});return;}
+        res.json({review,roomNumber:session.data()?.roomNumber||'',notice:'Preview only. No order has been submitted.'});return;
+      }
+      res.json({menu:publicMenu,roomNumber:session.data()?.roomNumber||''});
+    }catch{res.status(503).json({error:'Dining menu unavailable.'});}
+  });
+
   app.post('/api/gemini/concierge', async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -958,6 +982,8 @@ async function startServer() {
     }
 
     let trustedHotel:any=null;
+    let trustedSession:any=null;
+    let diningMenu=EMPTY_MENU;
     let usageHotel='unattributed';
     // Guest turns must belong to a currently accessible session. Staff diagnostics are separate.
     if (body.sessionId!==undefined || body.guestMessageId!==undefined) {
@@ -967,7 +993,7 @@ async function startServer() {
         const [session,property,message]=await Promise.all([hotel.collection('sessions').doc(body.sessionId).get(),hotel.get(),hotel.collection('sessions').doc(body.sessionId).collection('messages').doc(body.guestMessageId).get()]);
         if(!session.exists||!guestAccessOpen(session.data(),decodedUid)){res.status(403).json({error:'Conversation expired or ended. Start a new chat.'});return;}
         if(!property.exists||!message.exists||message.data()?.sender!=='guest'||message.data()?.guestUid!==decodedUid||typeof body.latestGuestMessage!=='string'||message.data()?.text?.trim()!==body.latestGuestMessage.trim()){res.status(403).json({error:'Invalid guest turn.'});return;}
-        trustedHotel=property.data(); usageHotel=body.hotelId;
+        trustedHotel=property.data(); trustedSession=session.data(); usageHotel=body.hotelId;
       }catch{res.status(503).json({error:'Unable to verify conversation access.'});return;}
     } else {
       const staff=await verifiedStaff(req);
@@ -1074,6 +1100,19 @@ async function startServer() {
     };
     // Diagnostic metadata contains no guest messages, credentials, or conversation identifiers.
     const searchDiagnostics = { intentDetected: requiresLocalGrounding, area: areaHint, attempts: [] as { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[] };
+
+    // Dining entry is deterministic and runs before the AI provider. Safety always takes precedence.
+    if(trustedHotel&&!safetySignal.triggered){
+      try{
+        const snap=await teamDb().collection('hotels').doc(usageHotel).collection('dining').doc('menu').get();
+        diningMenu=snap.exists?(parseDiningMenu(snap.data())||EMPTY_MENU):EMPTY_MENU;
+        const intent=diningIntent(latestGuestMessage,diningMenu.items);
+        if(intent!=='other'){
+          const reply=intent==='ambiguous'?'Do you mean in-room dining (food and beverages) or housekeeping to clean your room? No request has been placed.':diningReply(diningMenu,latestGuestMessage);
+          res.json({text:reply,guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[]});return;
+        }
+      }catch{if(diningIntent(latestGuestMessage)!=='other'){res.json({text:'Dining information is temporarily unavailable. Please contact the front desk. No order has been placed.',roomNumber:trustedSession?.roomNumber||'',requests:[]});return;}}
+    }
 
     // Exact configured English FAQ only. Ambiguous matches and safety signals use normal handling.
     if(trustedHotel&&!safetySignal.triggered){
@@ -1240,7 +1279,7 @@ STRICT RULES:
 - STRICT ANTI-HALLUCINATION RULE: Never invent, guess, or make up hotel policies, prices, operating hours, on-site amenities, OR local restaurant/business/attraction names (e.g., never invent fictional names like "Burger Barn", "Pizza Palace", "Taco Town", or "Fun Zone Arcade").
 - Every local business, restaurant, or attraction name you recommend MUST appear verbatim in either the Hotel Knowledge Base (FAQs) or VERIFIED LOCAL SEARCH RESULTS below. If neither contains verified businesses for the guest's question, honestly explain that live search could not verify suitable listings. Offer practical ways to search nearby, and offer Front Desk assistance as an optional alternative. Never imply a handoff was requested unless the guest explicitly asks for it.
 - Never claim that local emergency services (911/fire/police) have been dispatched. For immediate physical danger (fire, smoke, gas leak, medical emergency, violence), give clear safety guidance, advise contacting local emergency services immediately, and flag escalationTriggered=true with escalationSeverity="critical".
-- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
+- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining (or front desk if unavailable). Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
 
 LAYER 2 — HOSPITALITY INTELLIGENCE & TONE:
 - Always reply in the SAME language the guest used in their latest message (e.g. Spanish -> Spanish, French -> French).
@@ -1518,6 +1557,13 @@ ACTION & EXTRACTION RULES:
               : itemTitle,
           priority: parsed.requestPriority === 'high' ? 'high' : 'normal',
         });
+      }
+
+      // Do not accept generic dining order requests emitted by the legacy model.
+      // Keep independent housekeeping, maintenance and safety requests intact.
+      for(let i=normalizedRequests.length-1;i>=0;i--){
+        const r=normalizedRequests[i];
+        if(/\b(room service|in[- ]room dining|food order|meal order)\b/i.test(r.item+' '+r.category)&&!(/\b(clean|housekeeping)\b/i.test(r.item+' '+r.category)))normalizedRequests.splice(i,1);
       }
 
       // Deterministic safety & serious complaint override merge
