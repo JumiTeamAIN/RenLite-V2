@@ -128,7 +128,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,200);
     assert.equal((await dining(owner,'menu',{menu:sampleMenu,version:0})).status,409);
     assert.equal((await dining(owner,'menu')).data.menu.items[0].priceCents,2200);
-    const guestMenu={...sampleMenu,enabled:true,items:[{...sampleMenu.items[0],modifiers:['Cooking temperature | Medium | Well done']}]};
+    const guestMenu={...sampleMenu,enabled:true,items:[{...sampleMenu.items[0],modifiers:['Cooking temperature | Medium | Well done'],modifierGroups:[{id:'protein',question:'Add a protein',required:false,options:[{label:'Shrimp',priceCents:600}]}]}]};
     assert.equal((await dining(owner,'menu',{menu:guestMenu,version:1})).status,200);
     async function guestDining(account,body={}){
       const response=await fetch(base+'/api/dining/guest/'+owner.uid,{method:'POST',headers:{Authorization:'Bearer '+account.token,'Content-Type':'application/json'},body:JSON.stringify({sessionId:'outage-session',...body})});
@@ -140,6 +140,15 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     await outageSession.update({roomNumber:'101',locationType:'room'});
     const reviewed=await guestDining(outageGuest,cart);
     assert.equal(reviewed.data.review.subtotalCents,4400);
+    const pricedCart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium','custom-protein':'Shrimp'}}]};
+    const pricedReview=await guestDining(outageGuest,pricedCart);
+    assert.equal(pricedReview.status,200);
+    assert.equal(pricedReview.data.review.subtotalCents,5600);
+    assert.equal(pricedReview.data.review.lines[0].unitPriceCents,2800);
+    assert.equal(pricedReview.data.review.lines[0].choices[1].priceCents,600);
+    assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-protein':'Free shrimp'}}]})).status,409);
+    assert.equal((await guestDining(outageGuest,{...pricedCart,lines:[{...pricedCart.lines[0],choices:{'0':'Medium','custom-invented':'Shrimp'}}]})).status,409);
+
     const quoteId=reviewed.data.quoteId;
     assert.ok(quoteId);
     assert.equal((await guestDining(other,{confirmQuoteId:quoteId})).status,403);

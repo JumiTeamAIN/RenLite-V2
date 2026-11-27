@@ -23,9 +23,14 @@ export function diningIntent(text:string,items:MenuItem[]=[]):'dining'|'ambiguou
  return 'other';
 }
 export function modifierGroups(item:MenuItem){
- return item.modifiers.map((m,i)=>{const [question,...options]=m.split('|').map(s=>s.trim());return {id:String(i),question,options:[...new Set(options.filter(Boolean))]};});
+ const legacy=item.modifiers.map((m,i)=>{const [question,...options]=m.split('|').map(s=>s.trim());return {id:String(i),question,required:true,options:[...new Set(options.filter(Boolean))],prices:Object.fromEntries(options.filter(Boolean).map(o=>[o,0]))};});
+ const advanced=(item.modifierGroups||[]).map(g=>({id:'custom-'+g.id,question:g.question,required:g.required,options:g.options.map(o=>o.label),prices:Object.fromEntries(g.options.map(o=>[o.label,o.priceCents]))}));
+ return [...legacy,...advanced];
 }
 export type CartLine={itemId:string;quantity:number;choices:Record<string,string>};
+export function estimatedUnitCents(item:MenuItem,line:CartLine){
+ return (item.priceCents??0)+modifierGroups(item).reduce((n,g)=>n+(g.options.includes(line.choices[g.id])?(g.prices[line.choices[g.id]]||0):0),0);
+}
 export function reviewCart(menu:DiningMenu,lines:CartLine[],guestCount:number){
  if(!menu.enabled||!Number.isInteger(guestCount)||guestCount<1||guestCount>20||!Array.isArray(lines)||!lines.length||lines.length>30)return {error:'Select available items and enter a dining party of 1–20.'} as const;
  const output=[];let subtotalCents=0;
@@ -34,9 +39,10 @@ export function reviewCart(menu:DiningMenu,lines:CartLine[],guestCount:number){
    if(!item||!orderable(item))return {error:'An item is no longer available. Update your cart.'} as const;
    if(!Number.isInteger(line.quantity)||line.quantity<1||line.quantity>20||!line.choices||typeof line.choices!=='object'||Array.isArray(line.choices))return {error:'Invalid quantity or preparation choices.'} as const;
    const groups=modifierGroups(item);
-   if(Object.keys(line.choices).length!==groups.length||groups.some(g=>!g.options.length||!g.options.includes(line.choices[g.id])))return {error:'Complete the hotel-approved preparation choices for '+item.name+'.'} as const;
-   const lineTotal=item.priceCents!*line.quantity;subtotalCents+=lineTotal;
-   output.push({itemId:item.id,name:item.name,quantity:line.quantity,unitPriceCents:item.priceCents!,lineTotalCents:lineTotal,choices:groups.map(g=>({question:g.question,answer:line.choices[g.id]}))});
+   if(Object.keys(line.choices).some(k=>!groups.some(g=>g.id===k))||groups.some(g=>{const choice=line.choices[g.id];return choice===undefined||choice===''?g.required:!g.options.includes(choice);}))return {error:'Complete the hotel-approved preparation choices for '+item.name+'.'} as const;
+   const unitPriceCents=estimatedUnitCents(item,line);
+   const lineTotal=unitPriceCents*line.quantity;subtotalCents+=lineTotal;
+   output.push({itemId:item.id,name:item.name,quantity:line.quantity,unitPriceCents,lineTotalCents:lineTotal,choices:groups.filter(g=>Boolean(line.choices[g.id])).map(g=>({question:g.question,answer:line.choices[g.id],...(g.prices[line.choices[g.id]]?{priceCents:g.prices[line.choices[g.id]]}:{})}))});
  }
  return {subtotalCents,currency:menu.currency,guestCount,lines:output};
 }
@@ -47,7 +53,7 @@ export function diningReply(menu:DiningMenu,text:string){
  const price=(item:MenuItem)=>menu.currency+' '+((item.priceCents??0)/100).toFixed(2);
  if(requested&&orderable(requested)){
    const groups=modifierGroups(requested);
-   const options=groups.filter(g=>g.options.length).map(g=>g.question+': '+g.options.join(' or ')).join('; ');
+   const options=groups.filter(g=>g.options.length).map(g=>g.question+(g.required?' (required)':' (optional)')+': '+g.options.map(o=>o+(g.prices[o]?' (+'+menu.currency+' '+(g.prices[o]/100).toFixed(2)+')':'')).join(' or ')).join('; ');
    const extra=menu.items.find(x=>requested.upsells.includes(x.id)&&orderable(x));
    return 'Certainly! Our '+requested.name+' is '+price(requested)+'. '+(requested.description?requested.description+' ':'')+(options?'We offer these preparation choices: '+options+'. ':'')+(extra?'Would '+extra.name+' ('+price(extra)+') go well with your meal? ':'')+'Use the Add to cart button below, or open Dining to customize your selections and confirm your order when ready. No order has been placed.';
  }
