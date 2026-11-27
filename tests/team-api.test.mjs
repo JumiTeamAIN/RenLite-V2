@@ -204,6 +204,15 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     assert.deepEqual(parseCartCommand('Confirm and place order'),{kind:'confirm'});
     assert.equal(parseCartCommand('Yes please'),null);
     assert.equal(parseCartCommand('I need towels'),null);
+    const {simpleDiningProposal,guidedDiningReply}=await import('../services/diningOrder.ts');
+    const burgerRequest=simpleDiningProposal(availableMenu,'I would like to order a burger.');
+    assert.equal(burgerRequest.itemId,'burger');
+    assert.match(guidedDiningReply(availableMenu,burgerRequest),/Cooking temperature/);
+    assert.equal(simpleDiningProposal(availableMenu,'I would like two burgers.').quantity,2);
+    assert.equal(simpleDiningProposal(availableMenu,'I want a burger without cheese'),null);
+    assert.equal(simpleDiningProposal(availableMenu,'I want a burger and juice'),null);
+    assert.equal(simpleDiningProposal(availableMenu,'I want a burger allergy'),null);
+    assert.equal(simpleDiningProposal({...availableMenu,items:availableMenu.items.map(x=>({...x,soldOut:true}))},'I want a burger'),null);
     const multiCart={guestCount:2,lines:[{itemId:'burger',quantity:2,choices:{'0':'Medium','custom-toppings':['Mushrooms','Pepperoni']}}]};
     const multiReview=await guestDining(outageGuest,multiCart);
     assert.equal(multiReview.status,200);
@@ -263,7 +272,7 @@ test('invitation and membership HTTP lifecycle', {timeout:90000}, async () => {
     const startDining=await outageTurn('dining-intent','I would like room service.');
     assert.equal(startDining.status,200);assert.equal(startDining.data.requests.length,0);assert.match(startDining.data.text,/No order has been placed/);
     const itemSuggestion=await outageTurn('dining-suggestion','I would like to order a burger.');
-    assert.equal(itemSuggestion.status,200);assert.equal(itemSuggestion.data.requests.length,0);assert.equal(itemSuggestion.data.diningSuggestion.itemId,'burger');assert.match(itemSuggestion.data.text,/No order has been placed/);
+    assert.equal(itemSuggestion.status,200);assert.equal(itemSuggestion.data.requests.length,0);assert.equal(itemSuggestion.data.diningSuggestion.itemId,'burger');assert.match(itemSuggestion.data.text,/No order has been placed/);assert.match(itemSuggestion.data.text,/Cooking temperature/);assert.equal(itemSuggestion.data.diningProposals[0].itemId,'burger');
     const followup=await outageTurn('dining-followup','I’ll take a burger.');
     assert.equal(followup.status,200);assert.equal(followup.data.diningSuggestion.itemId,'burger');assert.equal(followup.data.requests.length,0);
 
