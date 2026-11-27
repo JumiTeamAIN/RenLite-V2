@@ -1,4 +1,4 @@
-import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply} from './services/diningOrder.ts';
+import {diningIntent,diningReply,reviewCart,matchDiningItem,modifierGroups,contextualDiningIntent,validateDiningProposals,diningProposalReply,simpleDiningProposal,guidedDiningReply,explicitLocalDiningSearch} from './services/diningOrder.ts';
 import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,parseModifierSuggestions,orderable} from './services/diningMenu.ts';
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
@@ -1185,7 +1185,7 @@ async function startServer() {
         const snap=await teamDb().collection('hotels').doc(usageHotel).collection('dining').doc('menu').get();
         diningMenu=snap.exists?(parseDiningMenu(snap.data())||EMPTY_MENU):EMPTY_MENU;
         const intent=diningIntent(latestGuestMessage,diningMenu.items);
-        const canPlan=!requiresLocalGrounding&&!['staff_controlled','awaiting_human','completed'].includes(trustedSession?.status);
+        const canPlan=!explicitLocalDiningSearch(latestGuestMessage)&&!['staff_controlled','awaiting_human','completed'].includes(trustedSession?.status);
         // Simple orders do not depend on the model or token allowance.
         const simple=canPlan&&contextualDiningIntent(latestGuestMessage,transcript,diningMenu.items)?simpleDiningProposal(diningMenu,latestGuestMessage):null;
         if(simple){
@@ -1193,7 +1193,7 @@ async function startServer() {
           res.json({text:guidedDiningReply(diningMenu,simple),guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',humanHandoffRequested:false,escalation:{triggered:false,severity:'none',reason:''},requests:[],diningSuggestion:{itemId:simple.itemId,name:simple.name},diningProposals:[simple]});return;
         }
         // A constrained AI planning step only proposes available menu selections. No tool can submit an order.
-        if(diningMenu.enabled&&!requiresLocalGrounding&&!['staff_controlled','awaiting_human','completed'].includes(trustedSession?.status)&&contextualDiningIntent(latestGuestMessage,transcript,diningMenu.items)){
+        if(diningMenu.enabled&&canPlan&&contextualDiningIntent(latestGuestMessage,transcript,diningMenu.items)){
           try{
             const policy=await loadModelPolicy();
             const candidates=policy.enabled?policyCandidates(policy,'concierge',getAiClients().betaClient):[];
@@ -1217,7 +1217,7 @@ async function startServer() {
             }
           }catch(e){console.warn('[dining-plan]',{outcome:'planner-unavailable',status:getHttpStatusFromError(e)});}
         }
-        if(intent!=='other'){
+        if(intent!=='other'&&canPlan){
           console.info('[dining-plan]',{outcome:'menu-fallback',localSearch:requiresLocalGrounding});
           const reply=intent==='ambiguous'?'Do you mean in-room dining (food and beverages) or housekeeping to clean your room? No request has been placed.':diningReply(diningMenu,latestGuestMessage);
           const suggested=intent==='dining'&&diningMenu.enabled?matchDiningItem(latestGuestMessage,diningMenu.items):undefined;
