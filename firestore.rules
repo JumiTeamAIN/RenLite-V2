@@ -389,6 +389,7 @@ service cloud.firestore {
         allow create: if isSignedIn() &&
           isValidId(hotelId) &&
           isValidId(requestId) &&
+          !requestId.matches('^dining-.*') &&
           isValidRequest(incoming()) &&
           incoming().status in ['pending', 'escalated'] &&
           incoming().createdAt == request.time &&
