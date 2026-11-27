@@ -4,7 +4,7 @@ import {EMPTY_MENU,orderable,type DiningMenu,type MenuItem} from '../services/di
 import {modifierGroups,reviewCart,estimatedUnitCents,selectedOptions,validGroupChoice,resolveCartEdit,simpleDiningProposal,cartPreparationReply,diningTargetMatches,missingDiningTarget,diningFollowup,type CartCommand,type ModifierChoice,type CartLine} from '../services/diningOrder';
 export type ChatDiningItem={name:string;id:string;groups:ReturnType<typeof modifierGroups>;currency:string};
 export type ChatCartSnapshot={count:number;guestCount:number;room:string;currency:string;subtotal:number;lines:{name:string;quantity:number;choices:string[];total:number}[];review:ReturnType<typeof reviewCart>|null;quoteId:string;receipt:string;uncertain:boolean;busy:boolean;error:string};
-export type GuestDiningHandle={nextChatOffer:()=>string;tryMissingItem:(text:string)=>Promise<string>;dismissMissingItem:()=>string;tryExplicitAdd:(text:string)=>Promise<string|null>;tryPreparationEdit:(text:string)=>Promise<string|null>;chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
+export type GuestDiningHandle={nextChatOffer:()=>string;tryMissingItem:(text:string)=>Promise<string>;dismissMissingItem:()=>string;tryExplicitAdd:(text:string,allowBare?:boolean)=>Promise<string|null>;tryPreparationEdit:(text:string)=>Promise<string|null>;chatCommand:(command:CartCommand)=>Promise<string>;addFromChat:(itemId:string)=>Promise<string>;getChatItem:(itemId:string)=>Promise<ChatDiningItem>;addCustomizedFromChat:(item:ChatDiningItem,choices:Record<string,ModifierChoice>,quantity?:number)=>Promise<string>};
 export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sessionId:string;visible:boolean;onSubmitted?:()=>void;onCartSnapshot?:(snapshot:ChatCartSnapshot)=>void}>(({hotelId,sessionId,visible,onSubmitted,onCartSnapshot},ref)=>{
  const [menu,setMenu]=useState<DiningMenu>(EMPTY_MENU),[room,setRoom]=useState(''),[guestCount,setGuestCount]=useState(0),[lines,setLines]=useState<CartLine[]>([]),[busy,setBusy]=useState(false),[ready,setReady]=useState(false),[error,setError]=useState(''),[review,setReview]=useState<ReturnType<typeof reviewCart>|null>(null);
  const generation=useRef(0);
@@ -105,12 +105,13 @@ export const GuestDining=React.forwardRef<GuestDiningHandle,{hotelId:string;sess
    }
    return 'Review your cart.';
  }
- async function tryExplicitAdd(text:string):Promise<string|null>{
+ async function tryExplicitAdd(text:string,allowBare=false):Promise<string|null>{
    if(busy||uncertain||submitting.current||chatAdding.current)throw Error('Please finish the current dining action first.');
    const g=generation.current;
    const r=await api({});
    if(g!==generation.current)throw Error('Dining session changed. Please try again.');
-   const p=simpleDiningProposal(r.menu,text);
+   const bare=allowBare?diningTargetMatches(r.menu,text.trim().replace(/[.!?]+$/,'').replace(/,?\s+please$/i,'')):[];
+   const p=simpleDiningProposal(r.menu,text)||(bare.length===1?{itemId:bare[0].id,quantity:1,choices:{}}:null);
    if(!p)return null;
    const item=(r.menu as DiningMenu).items.find(x=>x.id===p.itemId);
    if(!item||modifierGroups(item).length)return null;
