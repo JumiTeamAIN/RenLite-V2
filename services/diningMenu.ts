@@ -73,3 +73,34 @@ export function parseModifierSuggestions(raw:unknown):ModifierSuggestion[]|null{
  }
  return result;
 }
+
+// These are review-only drafts, never guest-visible or saved automatically.
+export type LocalModifierDraft=ModifierSuggestion & {origin:'menu-text'|'template';evidence:string};
+export function scanMenuChoices(item:Pick<MenuItem,'name'|'description'|'modifiers'|'modifierGroups'>):LocalModifierDraft[]{
+ const drafts:LocalModifierDraft[]=[];
+ const normalize=(s:string)=>s.toLowerCase().trim().replace(/\s+/g,' ');
+ const existing=[...item.modifiers.map(m=>m.split('|').slice(1).map(normalize)),...(item.modifierGroups||[]).map(g=>g.options.map(o=>normalize(o.label)))];
+ const add=(g:LocalModifierDraft)=>{
+   const opts=g.options.map(normalize);
+   if(existing.some(e=>opts.every(o=>e.includes(o)))||drafts.some(e=>opts.every(o=>e.options.map(normalize).includes(o))))return;
+   drafts.push(g);
+ };
+ // Only short, literal alternatives inside a single comma/semicolon-delimited clause.
+ // More complex prose and prices are left for AI or manual review.
+ for(const clause of item.description.split(/[,;\n]/)){
+   const evidence=clause.trim();
+   if(!/\bor\b/i.test(evidence)||/[$€£\d]/.test(evidence))continue;
+   const parts=evidence.replace(/^(?:served with|choice of|choose|with)\s+/i,'').split(/\s+or\s+/i).map(s=>s.trim().replace(/[.!?]$/,''));
+   if(parts.length<2||parts.length>6||parts.some(s=>!s||s.length>70||s.split(/\s+/).length>7||! /^[\p{L}\p{M}\s&'-]+$/u.test(s)))continue;
+   if(new Set(parts.map(normalize)).size!==parts.length)continue;
+   add({question:parts.every(s=>/sauce|mustard|bbq|barbecue|ranch|ketchup|aioli/i.test(s))?'Which sauce would you prefer?':'Which option would you prefer?',required:true,options:parts,origin:'menu-text',evidence});
+ }
+ if(/\b(?:burger|steak|ribeye|sirloin|new york strip|filet mignon)\b/i.test(item.name)&&!/\b(?:vegan|vegetarian|plant[- ]based|chicken|turkey|fish|salmon|tuna|pork|ham|black bean|veggie)\b/i.test(item.name+' '+item.description)&&!existing.some(e=>e.some(o=>/\b(?:medium|rare|well done)\b/.test(o)))){
+   add({question:'How would you like it cooked?',required:true,options:['Rare','Medium rare','Medium','Medium well','Well done'],origin:'template',evidence:'Suggested cooking temperatures; verify the kitchen policy and available options.'});
+ }
+ return drafts.slice(0,6);
+}
+export function verifiedModifierPrice(value:string):number|null{
+ if(!/^\d{1,5}(?:\.\d{1,2})?$/.test(value)||Number(value)>10000)return null;
+ return Math.round(Number(value)*100);
+}
