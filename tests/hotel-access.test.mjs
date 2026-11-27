@@ -1,7 +1,7 @@
 import { before, after, test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { doc, collection, getDoc, getDocs, setDoc, updateDoc, Timestamp, serverTimestamp, query, where } from 'firebase/firestore';
+import { doc, collection, getDoc, getDocs, setDoc, updateDoc, Timestamp, serverTimestamp, query, where, runTransaction } from 'firebase/firestore';
 let env;
 const config = {name:'Test hotel',persona:'Helpful',faqs:[],slas:{housekeeping:15,maintenance:30,front_desk:5}};
 const claims = {email_verified:true,firebase:{sign_in_provider:'password'}};
@@ -94,4 +94,18 @@ test('staff-moved room cannot be overwritten and stale guest delivery is rejecte
  await assertFails(setDoc(doc(guest,'hotels','ownerA','requests','stale-room'),request('101')));
  await assertSucceeds(setDoc(doc(guest,'hotels','ownerA','requests','new-room'),request('205')));
  await assertFails(getDoc(doc(db('guestB',{firebase:{sign_in_provider:'anonymous'}}),'hotels','ownerA','sessions','moved')));
+});
+
+test('guest outage handoff and fallback notice can commit together; staff sees unread conversation',async()=>{
+ const guest=db('guestA',{firebase:{sign_in_provider:'anonymous'}});
+ const session=doc(guest,'hotels','ownerA','sessions','session1');
+ const reply=doc(guest,'hotels','ownerA','sessions','session1','ai-outage');
+ await assertSucceeds(runTransaction(guest,async tx=>{
+   await tx.get(session);await tx.get(reply);
+   tx.update(session,{status:'awaiting_human',isUnread:true,previewText:'Need assistance',previewStaffText:'Need assistance',lastUpdatedAt:serverTimestamp()});
+   tx.set(reply,{guestUid:'guestA',sender:'ai',text:'Provider unavailable',timestamp:serverTimestamp()});
+ }));
+ const staff=db('agent');const snap=await getDoc(doc(staff,'hotels','ownerA','sessions','session1'));
+ if(snap.data().status!=='awaiting_human'||!snap.data().isUnread)throw Error('Missing handoff');
+ await assertSucceeds(getDoc(doc(staff,'hotels','ownerA','sessions','session1','ai-outage')));
 });
