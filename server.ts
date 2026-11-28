@@ -3,6 +3,7 @@ import {EMPTY_MENU,parseDiningMenu,parseMenuExtraction,parseModifierSuggestions,
 import {DEFAULT_BUDGET,parseBudget,attemptDebit,estimateTokenDollars} from './services/aiBudget.ts';
 import fs from 'fs';
 import { DEFAULT_MODEL_POLICY, parseModelPolicy, candidateModels, courtesyReply, validModel, MODEL_IDS, type ModelPolicy } from './services/modelPolicy.ts';
+import {waterRequest,serviceFollowup,matchServiceTarget,serviceStatus,OPEN_SERVICE_STATES,type ServiceTarget} from './services/serviceActions.ts';
 import { directFaqAnswer } from './services/directFaq.ts';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1125,7 +1126,15 @@ async function startServer() {
     const emergencyPhone =
       typeof body.emergencyPhone === 'string' ? body.emergencyPhone.trim().slice(0, 50) : '';
     const rawFaqs = trustedHotel ? (Array.isArray(trustedHotel.faqs)?trustedHotel.faqs:[]) : Array.isArray(body.faqs) ? body.faqs : [];
-    const rawOpenRequests = Array.isArray(body.openRequests) ? body.openRequests : [];
+    let rawOpenRequests = Array.isArray(body.openRequests) ? body.openRequests : [];
+    let trustedRequests:ServiceTarget[]=[];
+    if(trustedHotel){
+      try{
+        const q=await teamDb().collection('hotels').doc(usageHotel).collection('requests').where('guestUid','==',decodedUid).where('sessionId','==',String(body.sessionId)).get();
+        trustedRequests=q.docs.filter(d=>d.data().roomNumber===trustedSession?.roomNumber).map(d=>({...d.data(),id:d.id} as ServiceTarget));
+        rawOpenRequests=trustedRequests.filter(r=>OPEN_SERVICE_STATES.includes(r.status));
+      }catch{rawOpenRequests=[];console.warn('[service-actions] request context unavailable');}
+    }
 
     if (!hotelName || hotelName.length > 200) {
       res.status(400).json({ error: 'Valid hotelName is required.' });
@@ -1212,8 +1221,48 @@ async function startServer() {
     // Diagnostic metadata contains no guest messages, credentials, or conversation identifiers.
     const searchDiagnostics = { intentDetected: requiresLocalGrounding, area: areaHint, attempts: [] as { model: string; outcome: string; elapsedMs: number; sourceCount?: number; status?: number }[] };
 
+    // Existing tickets are authoritative; never trust a browser-supplied status or target ID.
+    const activeService=trustedHotel&&!safetySignal.triggered&&!['staff_controlled','awaiting_human','completed'].includes(trustedSession?.status);
+    const applyFollowup=async(target:string):Promise<{note:string;flagged:boolean}|null>=>{
+      if(!activeService||!validHotelId(body.sessionId)||!validHotelId(body.guestMessageId))return null;
+      const sessionId=String(body.sessionId),turnId=String(body.guestMessageId);
+      const matched=matchServiceTarget(trustedRequests,target),open=matched.filter(r=>OPEN_SERVICE_STATES.includes(r.status));
+      const candidates=open.length?open:matched;
+      if(candidates.length!==1)return candidates.length>1?{note:'I found multiple matching requests. Which request reference should I check?',flagged:false}:null;
+      const chosen=candidates[0],hotel=teamDb().collection('hotels').doc(usageHotel),session=hotel.collection('sessions').doc(sessionId);
+      const ticket=hotel.collection('requests').doc(chosen.id),message=session.collection('messages').doc(turnId);
+      const receipt=session.collection('serviceActionReceipts').doc(createHash('sha256').update(turnId+'|followup|'+chosen.id).digest('hex'));
+      return teamDb().runTransaction(async tx=>{
+        const [s,m,r,previous]=await Promise.all([tx.get(session),tx.get(message),tx.get(ticket),tx.get(receipt)]);
+        const ss=s.data(),request=r.data();
+        if(!guestAccessOpen(ss,decodedUid)||['staff_controlled','awaiting_human','completed'].includes(ss?.status)||m.data()?.sender!=='guest'||m.data()?.guestUid!==decodedUid||m.data()?.text?.trim()!==latestGuestMessage||!request||request.guestUid!==decodedUid||request.sessionId!==sessionId||request.roomNumber!==ss?.roomNumber||ss?.roomNumber!==trustedSession?.roomNumber)return null;
+        const name=String(request.item||'Request').slice(0,200),reference=String(request.referenceCode||'').slice(0,30);
+        const flagged=OPEN_SERVICE_STATES.includes(request.status);
+        const note=name+(reference?' (#'+reference+')':'')+' is '+serviceStatus(request.status,Boolean(request.diningOrder))+'. '+(flagged?'I have flagged the existing request for staff attention. Delivery time is not confirmed.':request.status==='completed'?'If you have not received it, please speak with staff.':'Please speak with staff if you still need assistance.');
+        if(!previous.exists){
+          if(flagged){const now=FieldValue.serverTimestamp();tx.update(ticket,{priority:request.priority==='urgent'?'urgent':'high',lastUpdated:now});tx.update(session,{isUnread:true,lastUpdatedAt:now});}
+          tx.create(receipt,{flagged,createdAt:FieldValue.serverTimestamp()});
+        }
+        return {note,flagged:flagged&&(!previous.exists||previous.data()?.flagged===true)};
+      });
+    };
+    const followup=activeService?serviceFollowup(latestGuestMessage):null;
+    let followupOutcome:{note:string;flagged:boolean}|null=null;
+    if(followup){
+      try{followupOutcome=await applyFollowup(followup.target);}catch{followupOutcome={note:'I could not verify the request status or alert staff. Please use My Requests or Speak with Staff.',flagged:false};}
+      if(followup.pure&&(followupOutcome||/\b(?:room service|order|towels?|water|cleaning|housekeeping|pillows?|repair)\b/i.test(followup.target))){
+        res.json({text:followupOutcome?.note||'I could not find a matching request in this conversation. Please check My Requests or Speak with Staff.',guestLanguage:'en',roomNumber:trustedSession?.roomNumber||'',requests:[],staffAttention:!!followupOutcome?.flagged});return;
+      }
+    }
+    const water=activeService?waterRequest(latestGuestMessage):null;
+    if(water){
+      const {language,...request}=water;
+      const neutral='Let me submit your water request. Staff will confirm availability and any charges.';
+      res.json({text:language==='ceb'?'Isumite nako ang imong hangyo sa tubig. Ang staff mokumpirma sa availability ug bisan unsang bayranan.':language==='es'?'Voy a registrar su solicitud de agua. El personal confirmará la disponibilidad y cualquier cargo.':neutral,replyEnglish:language==='en'?'':neutral,latestGuestEnglish:language==='en'?'':'I would like '+request.quantity+' bottle(s) of water.',guestLanguage:language,roomNumber:trustedSession?.roomNumber||'',requests:[request]});return;
+    }
+
     // Dining entry is deterministic and runs before the AI provider. Safety always takes precedence.
-    if(trustedHotel&&!safetySignal.triggered){
+    if(trustedHotel&&!safetySignal.triggered&&!followup){
       try{
         const snap=await teamDb().collection('hotels').doc(usageHotel).collection('dining').doc('menu').get();
         diningMenu=snap.exists?(parseDiningMenu(snap.data())||EMPTY_MENU):EMPTY_MENU;
@@ -1427,7 +1476,7 @@ STRICT RULES:
 - STRICT ANTI-HALLUCINATION RULE: Never invent, guess, or make up hotel policies, prices, operating hours, on-site amenities, OR local restaurant/business/attraction names (e.g., never invent fictional names like "Burger Barn", "Pizza Palace", "Taco Town", or "Fun Zone Arcade").
 - Every local business, restaurant, or attraction name you recommend MUST appear verbatim in either the Hotel Knowledge Base (FAQs) or VERIFIED LOCAL SEARCH RESULTS below. If neither contains verified businesses for the guest's question, honestly explain that live search could not verify suitable listings. Offer practical ways to search nearby, and offer Front Desk assistance as an optional alternative. Never imply a handoff was requested unless the guest explicitly asks for it.
 - Never claim that local emergency services (911/fire/police) have been dispatched. For immediate physical danger (fire, smoke, gas leak, medical emergency, violence), give clear safety guidance, advise contacting local emergency services immediately, and flag escalationTriggered=true with escalationSeverity="critical".
-- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining to review and explicitly confirm submission (or front desk if unavailable). You cannot read or mutate the guest cart through this generic model. Never claim that an item, quantity or preparation preference has been added, removed, changed, noted or saved, and never summarize an unverified cart as fact. Only the structured dining workflow can confirm cart actions and submit a reviewed order. Do not recommend off-property restaurants unless the guest explicitly asks for them during a dining conversation. Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Do NOT write "I have already dispatched staff" or invent fake ticket/reference IDs—our system automatically appends verified ticket reference numbers after saving them.
+- Food ordering is handled by a separate Dining menu workflow. Never create a generic room service or food order ticket, claim a meal is ordered, being prepared, on its way, or promise delivery. For food ordering direct guests to Dining to review and explicitly confirm submission (or front desk if unavailable). You cannot read or mutate the guest cart through this generic model. Never claim that an item, quantity or preparation preference has been added, removed, changed, noted or saved, and never summarize an unverified cart as fact. Only the structured dining workflow can confirm cart actions and submit a reviewed order. Do not recommend off-property restaurants unless the guest explicitly asks for them during a dining conversation. Cleaning a room is Housekeeping, not dining. Preserve a known room number.\n- Ordinary bottled drinking water outside an explicit paid Dining order is a Housekeeping service request: use item Bottled water, category and department Housekeeping. Do not imply water is free or promise delivery timing. Detect in ANY language.\n- Never state an action was logged, updated, dispatched, scheduled, escalated or completed before verified application results. Use prospective phrasing for new requests. If the guest is following up, select an existing reference in serviceActions; never create a duplicate. Extract independent new issues in the same message.
 
 LAYER 2 — HOSPITALITY INTELLIGENCE & TONE:
 - Always reply in the SAME language the guest used in their latest message (e.g. Spanish -> Spanish, French -> French).
@@ -1462,7 +1511,7 @@ ACTION & EXTRACTION RULES:
 6. If requests are non-empty AND roomNumber is still "", acknowledge the request warmly in the guest's language AND ask which room or location they need it delivered to.
 7. If the guest asks to speak with a human/associate/front desk/manager, set humanHandoffRequested=true.
 8. If the guest reports suspected bedbugs, discrimination/harassment, flooding, or serious complaint, set escalationTriggered=true and escalationSeverity="high" (or "critical" for fire/smoke/medical/violence).
-9. TWO-WAY STAFF TRANSLATION: If guestLanguage is NOT English (not "en"), set latestGuestEnglish to an accurate English translation of the guest's latest message, and set replyEnglish to an accurate English translation of your reply. If the conversation is already in English, set both to "".`;
+9. For an explicit status follow-up in any language, return serviceActions with kind "followup" and exact referenceCode from Existing Open Requests. Do not create a duplicate ticket for it. If the guest asks to change timing, do not promise that a preference has been saved; explain that staff needs to confirm.\n10. TWO-WAY STAFF TRANSLATION: If guestLanguage is NOT English (not "en"), set latestGuestEnglish to an accurate English translation of the guest's latest message, and set replyEnglish to an accurate English translation of your reply. If the conversation is already in English, set both to "".`;
 
       const prompt = `TRANSCRIPT:\n${transcript}\n\nRespond as JSON matching the schema.`;
 
@@ -1508,6 +1557,7 @@ ACTION & EXTRACTION RULES:
             type: Type.STRING,
             description: 'Short English summary of the escalation reason, or empty string.',
           },
+          serviceActions:{type:Type.ARRAY,items:{type:Type.OBJECT,properties:{kind:{type:Type.STRING},referenceCode:{type:Type.STRING}},required:['kind','referenceCode']}},
           requests: {
             type: Type.ARRAY,
             description: 'All new service, maintenance, or recovery requests from the latest guest message.',
@@ -1619,7 +1669,7 @@ ACTION & EXTRACTION RULES:
       const rawText = response.text?.trim() || '{}';
       const parsed = parseModelJsonPayload(rawText);
 
-      const text =
+      let text =
         typeof parsed.reply === 'string' && parsed.reply.trim()
           ? parsed.reply.trim()
           : "I apologize, I didn't quite catch that. Could you please rephrase or let me know how our team can help?";
@@ -1631,7 +1681,7 @@ ACTION & EXTRACTION RULES:
           ? parsed.guestLanguage.trim().slice(0, 20).toLowerCase()
           : 'en';
       const isEnglish = guestLanguage === 'en' || guestLanguage.startsWith('en-');
-      const replyEnglish =
+      let replyEnglish =
         !isEnglish && typeof parsed.replyEnglish === 'string' && parsed.replyEnglish.trim()
           ? parsed.replyEnglish.trim().slice(0, 4500)
           : '';
@@ -1707,6 +1757,34 @@ ACTION & EXTRACTION RULES:
         });
       }
 
+      if(activeService&&!/\b(?:menu|room service|in.room dining|charged|buy|sparkling)\b/i.test(latestGuestMessage+' '+latestGuestEnglish)){
+        for(const r of normalizedRequests){
+          if(/^(?:bottled water|water bottles?|bottles? of water|water delivery|drinking water|water)$/i.test(r.item)){
+            r.item='Bottled water';r.category='Housekeeping';r.department='Housekeeping';
+          }
+        }
+        const translated=waterRequest(latestGuestEnglish);
+        if(translated&&!normalizedRequests.some(r=>r.item==='Bottled water')){
+          const {language,...request}=translated;normalizedRequests.push(request);
+        }
+      }
+      if(activeService&&!followupOutcome){
+        const translatedFollowup=serviceFollowup(latestGuestEnglish);
+        const modelAction=Array.isArray(parsed.serviceActions)?parsed.serviceActions.find((a:any)=>a?.kind==='followup'&&typeof a.referenceCode==='string'&&trustedRequests.some(r=>r.referenceCode===a.referenceCode)):undefined;
+        const target=translatedFollowup?.target||modelAction?.referenceCode;
+        if(target){try{followupOutcome=await applyFollowup(target);}catch{followupOutcome={note:'I could not verify the request status or alert staff. Please use My Requests or Speak with Staff.',flagged:false};}}
+      }
+      if(followupOutcome){
+        const target=followup?.target||serviceFollowup(latestGuestEnglish)?.target;
+        const matched=target?matchServiceTarget(trustedRequests,target):trustedRequests.filter(r=>Array.isArray(parsed.serviceActions)&&parsed.serviceActions.some((a:any)=>a?.kind==='followup'&&a.referenceCode===r.referenceCode));
+        for(let i=normalizedRequests.length-1;i>=0;i--){
+          const r=normalizedRequests[i];if(matched.some(x=>matchServiceTarget([x],r.item).length))normalizedRequests.splice(i,1);
+        }
+        const note=followupOutcome.note+(normalizedRequests.length?' I will also submit your new request for '+normalizedRequests.map(r=>r.item).join(', ')+'.':'');
+        if(isEnglish)text=note;
+        else{replyEnglish=note;text+='\n\n'+followupOutcome.note;}
+      }
+
       // Do not accept generic dining order requests emitted by the legacy model.
       // Keep independent housekeeping, maintenance and safety requests intact.
       for(let i=normalizedRequests.length-1;i>=0;i--){
@@ -1760,6 +1838,7 @@ ACTION & EXTRACTION RULES:
       await recordAssistance(escalationTriggered || humanHandoffRequested ? 'handoff' : normalizedRequests.length ? 'request_suggested' : !(typeof parsed.reply==='string' && parsed.reply.trim()) ? 'failed' : requiresLocalGrounding && !verifiedLocalFindings ? 'search_unavailable' : 'reply_generated',text);
       res.json({
         searchDiagnostics,
+        staffAttention:!!followupOutcome?.flagged,
         text,
         replyEnglish,
         latestGuestEnglish,
