@@ -58,6 +58,7 @@ interface ConciergeModelPayload {
   escalationSeverity?: string;
   escalationReason?: string;
   requests?: ConciergeRequestCandidate[];
+  serviceActions?: {kind:string;referenceCode:string}[];
   // Backward-compatible flat fields if fallback JSON emits them
   requestDetected?: boolean;
   requestItem?: string;
