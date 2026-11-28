@@ -48,6 +48,7 @@ interface ServerConciergeResponse {
     reason: string;
   };
   requests?: ServerConciergeRequest[];
+  staffAttention?: boolean;
   error?: string;
 }
 
@@ -485,6 +486,7 @@ export const sendMessageToAI = async (
       }
     }
     if (failedNotes.length > 0) {
+      // A failed write is never a successful service promise.
       responseText = `${responseText}\n\nNote: Could not automatically save (${failedNotes.join(', ')}). Please use Quick Request or tap Speak with Staff.`.slice(
         0,
         5000
@@ -526,7 +528,7 @@ export const sendMessageToAI = async (
       ...(staffResponseText
         ? { previewStaffText: staffResponseText }
         : { previewStaffText: responseText }),
-      isUnread: Boolean(data.escalation?.triggered || data.humanHandoffRequested),
+      isUnread: Boolean(data.escalation?.triggered || data.humanHandoffRequested || data.staffAttention || current.data().isUnread),
       ...(!current.data().roomMoveAt ? {...(resolvedRoomNumber ? { roomNumber: resolvedRoomNumber } : {}),...(matchedLocation?.id ? { locationId: matchedLocation.id } : {}),...(resolvedLocationLabel ? { locationLabel: resolvedLocationLabel } : {}),...(matchedLocation?.type ? { locationType: matchedLocation.type } : {})} : {}),
       ...(guestLanguage ? { guestLanguage } : {}),
       ...(nextStatus ? { status: nextStatus } : {}),
